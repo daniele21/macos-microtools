@@ -101,6 +101,123 @@ private func terminalClipHotkey(_ next: EventHandlerCallRef?, _ event: EventRef?
     return noErr
 }
 
+
+// MARK: - Native action rows (compact, keyboard-first)
+
+private final class ClipActionRow: NSView {
+    private let isPrimary: Bool
+    private var pointerInside = false
+    private var hoverArea: NSTrackingArea?
+
+    init(title: String, detail: String, symbol: String, shortcut: String = "",
+         primary: Bool = false, target: AnyObject, action: Selector) {
+        isPrimary = primary
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.cornerRadius = 10
+
+        let symbolView = NSImageView()
+        symbolView.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+        symbolView.imageScaling = .scaleProportionallyDown
+        symbolView.contentTintColor = primary ? .controlAccentColor : .secondaryLabelColor
+
+        let titleView = NSTextField(labelWithString: title)
+        titleView.font = .systemFont(ofSize: 12.5, weight: primary ? .semibold : .medium)
+        titleView.textColor = .labelColor
+        titleView.lineBreakMode = .byTruncatingTail
+
+        let detailView = NSTextField(labelWithString: detail)
+        detailView.font = .systemFont(ofSize: 10.5)
+        detailView.textColor = .secondaryLabelColor
+        detailView.lineBreakMode = .byTruncatingTail
+
+        let labels = NSStackView(views: [titleView, detailView])
+        labels.orientation = .vertical
+        labels.alignment = .leading
+        labels.spacing = 2
+
+        let shortcutView = NSTextField(labelWithString: shortcut)
+        shortcutView.font = .monospacedSystemFont(ofSize: 10.5, weight: .medium)
+        shortcutView.textColor = .tertiaryLabelColor
+        shortcutView.alignment = .right
+        shortcutView.setContentCompressionResistancePriority(.required, for: .horizontal)
+
+        let hitArea = NSButton(title: "", target: target, action: action)
+        hitArea.isBordered = false
+        hitArea.isTransparent = true
+        hitArea.toolTip = title + " — " + detail
+        hitArea.setAccessibilityLabel(title)
+
+        for view in [symbolView, labels, shortcutView, hitArea] {
+            addSubview(view)
+            view.translatesAutoresizingMaskIntoConstraints = false
+        }
+        NSLayoutConstraint.activate([
+            heightAnchor.constraint(equalToConstant: 51),
+            symbolView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 13),
+            symbolView.centerYAnchor.constraint(equalTo: centerYAnchor),
+            symbolView.widthAnchor.constraint(equalToConstant: 18),
+            symbolView.heightAnchor.constraint(equalToConstant: 18),
+
+            labels.leadingAnchor.constraint(equalTo: symbolView.trailingAnchor, constant: 12),
+            labels.centerYAnchor.constraint(equalTo: centerYAnchor),
+            labels.trailingAnchor.constraint(lessThanOrEqualTo: shortcutView.leadingAnchor, constant: -10),
+
+            shortcutView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -13),
+            shortcutView.centerYAnchor.constraint(equalTo: centerYAnchor),
+            shortcutView.leadingAnchor.constraint(greaterThanOrEqualTo: labels.trailingAnchor, constant: 10),
+
+            hitArea.leadingAnchor.constraint(equalTo: leadingAnchor),
+            hitArea.trailingAnchor.constraint(equalTo: trailingAnchor),
+            hitArea.topAnchor.constraint(equalTo: topAnchor),
+            hitArea.bottomAnchor.constraint(equalTo: bottomAnchor)
+        ])
+        refreshStyle()
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    private func refreshStyle() {
+        let color: NSColor
+        if isPrimary {
+            color = NSColor.controlAccentColor.withAlphaComponent(pointerInside ? 0.20 : 0.12)
+        } else {
+            color = NSColor.controlColor.withAlphaComponent(pointerInside ? 0.75 : 0.34)
+        }
+        layer?.backgroundColor = color.cgColor
+    }
+
+    override func updateTrackingAreas() {
+        if let area = hoverArea { removeTrackingArea(area) }
+        let area = NSTrackingArea(rect: .zero,
+                                  options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+                                  owner: self, userInfo: nil)
+        addTrackingArea(area)
+        hoverArea = area
+        super.updateTrackingAreas()
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        pointerInside = true
+        refreshStyle()
+    }
+    override func mouseExited(with event: NSEvent) {
+        pointerInside = false
+        refreshStyle()
+    }
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        refreshStyle()
+    }
+}
+
+private final class OpaqueClipPanel: NSView {
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+    }
+}
+
 final class TerminalClipApp: NSObject {
     private let status = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
     private let popover = NSPopover()
@@ -108,7 +225,8 @@ final class TerminalClipApp: NSObject {
     private var hotkeyHandler: EventHandlerRef?
     private var copying = false
     private var feedbackSequence = 0
-    private let info = NSTextField(labelWithString: "Solo Terminal.app · nessuna cattura continua")
+    private let info = NSTextField(labelWithString: "Locale · nessuna cronologia dell’output")
+    private let sourceStatus = NSTextField(labelWithString: "Terminal.app")
 
     override init() {
         super.init()
@@ -125,65 +243,157 @@ final class TerminalClipApp: NSObject {
     }
 
     private func createPanel() -> NSView {
-        let root = NSView(frame: NSRect(x: 0, y: 0, width: 350, height: 300))
+        // Deliberately opaque rather than using a translucent NSMenu or vibrancy.
+        let root = OpaqueClipPanel(frame: NSRect(x: 0, y: 0, width: 390, height: 460))
         root.wantsLayer = true
         root.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+        root.layer?.cornerRadius = 12
 
-        let heading = NSTextField(labelWithString: "TerminalClip")
-        heading.font = .systemFont(ofSize: 16, weight: .semibold)
-        let subtitle = NSTextField(labelWithString: "Copia dal tab corrente di Terminal.app")
-        subtitle.font = .systemFont(ofSize: 11)
-        subtitle.textColor = .secondaryLabelColor
-        info.font = .systemFont(ofSize: 11)
+        func label(_ text: String, size: CGFloat, weight: NSFont.Weight,
+                   color: NSColor = .labelColor) -> NSTextField {
+            let field = NSTextField(labelWithString: text)
+            field.font = .systemFont(ofSize: size, weight: weight)
+            field.textColor = color
+            field.lineBreakMode = .byTruncatingTail
+            return field
+        }
+        func sectionLabel(_ text: String) -> NSTextField {
+            return label(text, size: 10, weight: .semibold, color: .tertiaryLabelColor)
+        }
+        func symbol(_ name: String, tint: NSColor = .secondaryLabelColor) -> NSImageView {
+            let view = NSImageView()
+            view.image = NSImage(systemSymbolName: name, accessibilityDescription: nil)
+            view.imageScaling = .scaleProportionallyDown
+            view.contentTintColor = tint
+            return view
+        }
+
+        let headerIcon = symbol("terminal.fill", tint: .controlAccentColor)
+        headerIcon.translatesAutoresizingMaskIntoConstraints = false
+        headerIcon.widthAnchor.constraint(equalToConstant: 24).isActive = true
+        headerIcon.heightAnchor.constraint(equalToConstant: 24).isActive = true
+
+        let heading = label("TerminalClip", size: 16, weight: .semibold)
+        let tagline = label("Dall'output agli appunti in un clic", size: 11,
+                            weight: .regular, color: .secondaryLabelColor)
+        let headingText = NSStackView(views: [heading, tagline])
+        headingText.orientation = .vertical
+        headingText.alignment = .leading
+        headingText.spacing = 2
+        let header = NSStackView(views: [headerIcon, headingText])
+        header.orientation = .horizontal
+        header.alignment = .centerY
+        header.spacing = 12
+
+        let sourceIcon = symbol("circle.fill", tint: .systemGreen)
+        sourceIcon.translatesAutoresizingMaskIntoConstraints = false
+        sourceIcon.widthAnchor.constraint(equalToConstant: 7).isActive = true
+        sourceIcon.heightAnchor.constraint(equalToConstant: 7).isActive = true
+        sourceStatus.font = .systemFont(ofSize: 11, weight: .medium)
+        sourceStatus.textColor = .secondaryLabelColor
+        let sourceStack = NSStackView(views: [sourceIcon, sourceStatus])
+        sourceStack.orientation = .horizontal
+        sourceStack.alignment = .centerY
+        sourceStack.spacing = 7
+
+        let titleQuick = sectionLabel("OUTPUT")
+        let titleContext = sectionLabel("CONTESTO · ZSH OPZIONALE")
+
+        let actions = NSStackView()
+        actions.orientation = .vertical
+        actions.alignment = .leading
+        actions.spacing = 5
+        for row in [
+            ClipActionRow(title: "Copia ultimo output",
+                          detail: "Il blocco dell'ultimo comando",
+                          symbol: "doc.on.doc.fill", shortcut: "⌘⌥C",
+                          primary: true, target: self, action: #selector(copyOutput)),
+            ClipActionRow(title: "Ultime 100 righe",
+                          detail: "Solo la parte finale dei log",
+                          symbol: "text.alignleft", target: self, action: #selector(copyTail)),
+            ClipActionRow(title: "Report diagnostico",
+                          detail: "Comando, esito, durata e output",
+                          symbol: "doc.text.magnifyingglass",
+                          target: self, action: #selector(copyReport))
+        ] {
+            actions.addArrangedSubview(row)
+            row.widthAnchor.constraint(equalTo: actions.widthAnchor).isActive = true
+        }
+
+        let context = NSStackView()
+        context.orientation = .vertical
+        context.alignment = .leading
+        context.spacing = 5
+        for row in [
+            ClipActionRow(title: "Ultimo comando",
+                          detail: "Testo del comando eseguito",
+                          symbol: "chevron.left.forwardslash.chevron.right",
+                          target: self, action: #selector(copyCommand)),
+            ClipActionRow(title: "Directory corrente",
+                          detail: "Percorso di lavoro dell'ultima esecuzione",
+                          symbol: "folder",
+                          target: self, action: #selector(copyDirectory))
+        ] {
+            context.addArrangedSubview(row)
+            row.widthAnchor.constraint(equalTo: context.widthAnchor).isActive = true
+        }
+
+        info.font = .systemFont(ofSize: 10.5)
         info.textColor = .secondaryLabelColor
         info.lineBreakMode = .byTruncatingTail
+        info.stringValue = "Locale · nessuna cronologia dell'output"
+        info.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+        let quit = NSButton(title: "Esci", target: self, action: #selector(quitApp))
+        quit.bezelStyle = .inline
+        quit.font = .systemFont(ofSize: 11)
+        quit.setContentCompressionResistancePriority(.required, for: .horizontal)
+
+        let footer = NSStackView(views: [info, quit])
+        footer.orientation = .horizontal
+        footer.alignment = .centerY
+        footer.distribution = .fill
+        footer.spacing = 10
+
+        let separator = NSBox()
+        separator.boxType = .separator
 
         let stack = NSStackView()
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = 8
-        stack.addArrangedSubview(heading)
-        stack.addArrangedSubview(subtitle)
-
-        let entries: [(String, String, Selector)] = [
-            ("Copia ultimo output", "⌘⌥C", #selector(copyOutput)),
-            ("Copia ultime 100 righe", "", #selector(copyTail)),
-            ("Copia report diagnostico", "", #selector(copyReport)),
-            ("Copia ultimo comando", "", #selector(copyCommand)),
-            ("Copia directory", "", #selector(copyDirectory))
-        ]
-        for (title, shortcut, action) in entries {
-            let row = NSStackView()
-            row.orientation = .horizontal
-            row.distribution = .fill
-            row.spacing = 6
-            let button = NSButton(title: title, target: self, action: action)
-            button.font = .systemFont(ofSize: 12)
-            button.bezelStyle = .rounded
-            button.setContentHuggingPriority(.defaultLow, for: .horizontal)
-            let hint = NSTextField(labelWithString: shortcut)
-            hint.font = .systemFont(ofSize: 10)
-            hint.textColor = .tertiaryLabelColor
-            row.addArrangedSubview(button)
-            row.addArrangedSubview(hint)
-            stack.addArrangedSubview(row)
-            row.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        stack.spacing = 0
+        for (view, gap) in [(header as NSView, CGFloat(12)),
+                            (sourceStack as NSView, CGFloat(17)),
+                            (titleQuick as NSView, CGFloat(7)),
+                            (actions as NSView, CGFloat(17)),
+                            (titleContext as NSView, CGFloat(7)),
+                            (context as NSView, CGFloat(14)),
+                            (separator as NSView, CGFloat(9)),
+                            (footer as NSView, CGFloat(0))] {
+            stack.addArrangedSubview(view)
+            view.leadingAnchor.constraint(equalTo: stack.leadingAnchor).isActive = true
+            view.trailingAnchor.constraint(equalTo: stack.trailingAnchor).isActive = true
+            stack.setCustomSpacing(gap, after: view)
         }
-        stack.addArrangedSubview(info)
-        let quit = NSButton(title: "Esci", target: self, action: #selector(quitApp))
-        quit.bezelStyle = .inline
-        stack.addArrangedSubview(quit)
         root.addSubview(stack)
         stack.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 14),
-            stack.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -14),
-            stack.topAnchor.constraint(equalTo: root.topAnchor, constant: 12),
-            stack.bottomAnchor.constraint(lessThanOrEqualTo: root.bottomAnchor, constant: -12),
-            root.widthAnchor.constraint(equalToConstant: 350),
-            root.heightAnchor.constraint(greaterThanOrEqualTo: stack.heightAnchor, constant: 24)
+            root.widthAnchor.constraint(equalToConstant: 390),
+            stack.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 15),
+            stack.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -15),
+            stack.topAnchor.constraint(equalTo: root.topAnchor, constant: 16),
+            stack.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -13)
         ])
         return root
+    }
+
+    private func refreshSourceStatus() {
+        let running = !NSRunningApplication.runningApplications(
+            withBundleIdentifier: "com.apple.Terminal").isEmpty
+        sourceStatus.stringValue = running
+            ? "Terminal.app disponibile"
+            : "Terminal.app non aperto"
+        sourceStatus.textColor = running ? .secondaryLabelColor : .systemOrange
     }
 
     private func installHotkey() {
@@ -202,7 +412,11 @@ final class TerminalClipApp: NSObject {
     @objc private func togglePopover() {
         guard let button = status.button else { return }
         if popover.isShown { popover.performClose(nil) }
-        else { popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY) }
+        else {
+            refreshSourceStatus()
+            popover.contentSize = popover.contentViewController?.view.fittingSize ?? NSSize(width: 390, height: 460)
+            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        }
     }
     @objc private func copyOutput() { execute(.output) }
     @objc private func copyTail() { execute(.tail) }
