@@ -2,7 +2,7 @@ PREFIX ?= $(HOME)/.local/bin
 SWIFTC ?= swiftc
 SWIFTFLAGS = -O
 
-.PHONY: all build install clean uninstall install-terminalclip uninstall-terminalclip test-terminalclip
+.PHONY: all build install clean uninstall install-terminalclip refresh-terminalclip uninstall-terminalclip test-terminalclip
 
 all: build
 
@@ -25,6 +25,17 @@ install-terminalclip: bin/TerminalClip.app/Contents/MacOS/TerminalClip
 	rm -rf $(HOME)/.local/opt/TerminalClip.app
 	ditto bin/TerminalClip.app $(HOME)/.local/opt/TerminalClip.app
 	@echo "✓ TerminalClip installed to $(HOME)/.local/opt/TerminalClip.app"
+
+# Force a clean rebuild and reopen the exact app bundle from this repository.
+# This prevents the menu-bar icon from continuing to run an older version.
+refresh-terminalclip:
+	$(MAKE) -B bin/TerminalClip.app/Contents/MacOS/TerminalClip
+	@pkill -x TerminalClip 2>/dev/null || true
+	@sleep 1
+	$(MAKE) install-terminalclip
+	@open -n "$(HOME)/.local/opt/TerminalClip.app"
+	@echo "✓ TerminalClip refreshed and reopened: $(HOME)/.local/opt/TerminalClip.app"
+	@echo "  The redesigned popover shows v0.2 beside the title."
 
 test-terminalclip: | bin
 	$(SWIFTC) -D TERMINALCLIP_TEST tools/terminalclip/terminalclip.swift tools/terminalclip/tests/main.swift -o bin/terminalclip-tests
