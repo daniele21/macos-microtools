@@ -161,6 +161,70 @@ struct RunnerPulseSnapshot {
     var longCount: Int { running.filter { $0.isLongRunning }.count }
 }
 
+// MARK: - Local foreground-runner telemetry (no GitHub credentials)
+
+struct RunnerPulseLocalJob: Decodable {
+    let name: String?
+    let repository: String?
+    let sha: String?
+    let workflow: String?
+    let event_name: String?
+    let started_at: Double
+    let current_step: String?
+    let steps: [String]?
+}
+
+struct RunnerPulseLocalEvent: Decodable, Identifiable {
+    let time: Double
+    let kind: String
+    let name: String?
+    let repository: String?
+    let result: String?
+    let duration_seconds: Double?
+    let step: String?
+    var id: String { "\(time)-\(kind)-\(name ?? "")-\(step ?? "")" }
+}
+
+struct RunnerPulseLocalSnapshot: Decodable, Identifiable {
+    let schema_version: Int
+    let runner_id: Int
+    let session_id: String
+    let pid: Int
+    let updated_at: Double
+    let status: String
+    let job: RunnerPulseLocalJob?
+    let recent_events: [RunnerPulseLocalEvent]
+
+    var id: Int { runner_id }
+
+    func isFresh(now: Date = Date()) -> Bool {
+        let age = now.timeIntervalSince1970 - updated_at
+        return schema_version == 1 && age >= -5 && age <= 6
+    }
+    var isRunning: Bool { isFresh() && status == "running" && job != nil }
+    var isIdle: Bool { isFresh() && status == "idle" }
+}
+
+enum RunnerPulseLocalReader {
+    static func defaultDirectory() -> URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/RunnerPulse/runners", isDirectory: true)
+    }
+
+    static func load(from directory: URL = defaultDirectory()) -> [RunnerPulseLocalSnapshot] {
+        let decoder = JSONDecoder()
+        return (1...4).compactMap { id in
+            let file = directory.appendingPathComponent("runner-\(id).json")
+            guard let attrs = try? FileManager.default.attributesOfItem(atPath: file.path),
+                  let bytes = attrs[.size] as? NSNumber, bytes.intValue <= 128 * 1024,
+                  let data = try? Data(contentsOf: file),
+                  let snapshot = try? decoder.decode(RunnerPulseLocalSnapshot.self, from: data),
+                  snapshot.runner_id == id && snapshot.schema_version == 1 else { return nil }
+            return snapshot
+        }
+    }
+}
+
 enum RunnerAPIError: LocalizedError {
     case invalidResponse(Int)
     case api(Int, String)
@@ -368,6 +432,8 @@ final class RunnerPulseState: ObservableObject {
     // The current macOS CLT SDK requires a SwiftUIMacros plugin for @State
     // that is only bundled with full Xcode. Never persist this draft.
     @Published var pendingToken = ""
+    @Published var localSnapshots: [RunnerPulseLocalSnapshot] = []
+    private var localTimer: Timer?
     private var token: String?
     private var lastRequest: Date?
     private var generation = 0
@@ -377,7 +443,8 @@ final class RunnerPulseState: ObservableObject {
         repositoriesText = UserDefaults.standard.string(forKey: "runnerpulse.repositories") ?? ""
         organizationsText = UserDefaults.standard.string(forKey: "runnerpulse.organizations") ?? ""
         token = RunnerPulseKeychain.read()
-        showSettings = token == nil || RunnerPulseCore.validRepositories(repositoriesText).isEmpty
+        // Local dashboard is the default: never force a GitHub auth dialog on launch.
+        showSettings = false
     }
 
     var configured: Bool {
@@ -423,7 +490,19 @@ final class RunnerPulseState: ObservableObject {
         showSettings = true
     }
 
-    func start() { refresh(force: true) }
+    var hasLocalTelemetry: Bool { !localSnapshots.isEmpty }
+
+    func pollLocal() {
+        localSnapshots = RunnerPulseLocalReader.load()
+    }
+
+    func start() {
+        pollLocal()
+        localTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            self?.pollLocal()
+        }
+        refresh(force: true) // Optional GitHub view remains available when configured.
+    }
 
     func refresh(force: Bool = false) {
         guard configured, !refreshing, let token else { return }
