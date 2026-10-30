@@ -1,0 +1,29 @@
+name: TerminalClip macOS validation
+
+on:
+  pull_request:
+    paths:
+      - 'tools/terminalclip/**'
+      - 'Makefile'
+      - '.github/workflows/terminalclip.yml'
+  push:
+    branches: [feat/terminalclip-mvp]
+    paths:
+      - 'tools/terminalclip/**'
+      - 'Makefile'
+      - '.github/workflows/terminalclip.yml'
+
+jobs:
+  build-and-test:
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Swift unit checks and AppKit typecheck
+        run: make test-terminalclip
+      - name: Build and install TerminalClip
+        run: make install-terminalclip
+      - name: Verify app bundle
+        run: |
+          test -x "$HOME/.local/opt/TerminalClip.app/Contents/MacOS/TerminalClip"
+          plutil -lint "$HOME/.local/opt/TerminalClip.app/Contents/Info.plist"
