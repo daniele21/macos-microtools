@@ -33,7 +33,6 @@ refresh-terminalclip:
 	@pkill -x TerminalClip 2>/dev/null || true
 	@sleep 1
 	$(MAKE) install-terminalclip
-	$(MAKE) install-runnerpulse
 	@open -n "$(HOME)/.local/opt/TerminalClip.app"
 	@echo "✓ TerminalClip refreshed and reopened: $(HOME)/.local/opt/TerminalClip.app"
 	@echo "  The redesigned popover shows v0.2 beside the title."
@@ -49,6 +48,7 @@ install: build
 	cp tools/menumeter/menumeter.swift $(PREFIX)/menumeter.swift
 	@echo "✓ MenuMeter installed to $(PREFIX)/menumeter"
 	$(MAKE) install-terminalclip
+	$(MAKE) install-runnerpulse
 
 uninstall-terminalclip:
 	-pkill -x TerminalClip 2>/dev/null
