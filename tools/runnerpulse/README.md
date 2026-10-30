@@ -44,6 +44,18 @@ your-org/your-private-repo
 
 You can add or remove repos without rebuilding. Repository and organization names (not secrets) are kept in UserDefaults.
 
+## Command Line Tools compatibility
+
+SwiftUI in recent macOS SDKs defines `@State` through the `SwiftUIMacros` compiler plugin. The standalone Command Line Tools may ship the SDK interface but not this plugin, causing `SwiftUIMacros.StateMacro` build errors. RunnerPulse avoids `@State` entirely: the transient secure token input is bound to an existing `@Published` property of the `@ObservedObject` state model. The draft is cleared when settings are saved/closed, and the token is persisted only in macOS Keychain.
+
+After updating the repository, run:
+
+~~~bash
+make refresh-runnerpulse
+~~~
+
+The build still requires the Apple Command Line Tools. CI checks that `@State` is not reintroduced, in addition to compiling the macOS app on GitHub Actions. If other compiler errors persist, capture `swiftc --version`, `xcode-select -p` and `xcrun --show-sdk-version` when reporting them.
+
 ## What is displayed
 
 - **Workers:** online/idle, busy, offline from the runner inventory API. If only job data is available, cards are marked "job osservato" and cannot assert that all machines are listed.

@@ -91,6 +91,11 @@ refresh-runnerpulse:
 	@open -n "$(HOME)/.local/opt/RunnerPulse.app"
 
 test-runnerpulse: | bin
+	@# Prevent Xcode-only SwiftUI @State macros from breaking Command Line Tools builds.
+	@if grep -Eq '^[[:space:]]*@State([[:space:]]|\(|$)' tools/runnerpulse/runnerpulse.swift; then \
+		echo 'RunnerPulse compatibility check failed: @State requires SwiftUIMacros on newer macOS SDKs; use @Published + @ObservedObject.' >&2; \
+		exit 1; \
+	fi
 	$(SWIFTC) -D RUNNERPULSE_TEST tools/runnerpulse/runnerpulse.swift tools/runnerpulse/tests/main.swift -o bin/runnerpulse-tests
 	./bin/runnerpulse-tests
 	@if [ "$$(uname -s)" = Darwin ]; then $(MAKE) build-runnerpulse; fi
