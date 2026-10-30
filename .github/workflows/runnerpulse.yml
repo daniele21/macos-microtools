@@ -1,0 +1,31 @@
+name: RunnerPulse macOS validation
+
+on:
+  pull_request:
+    paths:
+      - 'tools/runnerpulse/**'
+      - 'Makefile'
+      - '.github/workflows/runnerpulse.yml'
+  push:
+    branches: [feat/runnerpulse-mvp]
+    paths:
+      - 'tools/runnerpulse/**'
+      - 'Makefile'
+      - '.github/workflows/runnerpulse.yml'
+
+jobs:
+  build-and-test:
+    runs-on: macos-15
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Unit tests and native compile
+        run: make test-runnerpulse
+      - name: Build and install app
+        run: make install-runnerpulse
+      - name: Verify app bundle
+        run: |
+          test -x "$HOME/.local/opt/RunnerPulse.app/Contents/MacOS/RunnerPulse"
+          plutil -lint "$HOME/.local/opt/RunnerPulse.app/Contents/Info.plist"
