@@ -685,11 +685,11 @@ private struct RunnerPulsePanel: View {
                                 }.buttonStyle(.plain)
                             }
                         }
-                        for message in state.snapshot.errors {
+                        ForEach(state.snapshot.errors, id: \.self) { message in
                             Label(message, systemImage: "exclamationmark.triangle.fill")
                                 .foregroundStyle(.red).font(.system(size: 10))
                         }
-                        for message in state.snapshot.warnings {
+                        ForEach(state.snapshot.warnings, id: \.self) { message in
                             Label(message, systemImage: "info.circle")
                                 .foregroundStyle(.secondary).font(.system(size: 10))
                         }
