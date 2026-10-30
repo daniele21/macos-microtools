@@ -23,6 +23,15 @@ jobs:
       - uses: actions/checkout@v4
       - name: Unit tests and native compile
         run: make test-runnerpulse
+      - name: Compile with standalone Command Line Tools if installed
+        run: |
+          if [ -d /Library/Developer/CommandLineTools/SDKs ]; then
+            echo "Checking RunnerPulse with CLT SDK:"
+            DEVELOPER_DIR=/Library/Developer/CommandLineTools xcrun --show-sdk-version
+            DEVELOPER_DIR=/Library/Developer/CommandLineTools make -B build-runnerpulse
+          else
+            echo "::notice::No standalone Command Line Tools SDK on this runner; macro guard still enforced."
+          fi
       - name: Build and install app
         run: make install-runnerpulse
       - name: Verify app bundle
