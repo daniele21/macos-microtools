@@ -227,6 +227,7 @@ final class TerminalClipApp: NSObject {
     private var feedbackSequence = 0
     private let info = NSTextField(labelWithString: "Locale · nessuna cronologia dell’output")
     private let sourceStatus = NSTextField(labelWithString: "Terminal.app")
+    private let sourceDot = NSImageView()
 
     override init() {
         super.init()
@@ -285,19 +286,20 @@ final class TerminalClipApp: NSObject {
         header.alignment = .centerY
         header.spacing = 12
 
-        let sourceIcon = symbol("circle.fill", tint: .systemGreen)
-        sourceIcon.translatesAutoresizingMaskIntoConstraints = false
-        sourceIcon.widthAnchor.constraint(equalToConstant: 7).isActive = true
-        sourceIcon.heightAnchor.constraint(equalToConstant: 7).isActive = true
+        sourceDot.image = NSImage(systemSymbolName: "circle.fill", accessibilityDescription: nil)
+        sourceDot.contentTintColor = .systemGreen
+        sourceDot.translatesAutoresizingMaskIntoConstraints = false
+        sourceDot.widthAnchor.constraint(equalToConstant: 7).isActive = true
+        sourceDot.heightAnchor.constraint(equalToConstant: 7).isActive = true
         sourceStatus.font = .systemFont(ofSize: 11, weight: .medium)
         sourceStatus.textColor = .secondaryLabelColor
-        let sourceStack = NSStackView(views: [sourceIcon, sourceStatus])
+        let sourceStack = NSStackView(views: [sourceDot, sourceStatus])
         sourceStack.orientation = .horizontal
         sourceStack.alignment = .centerY
         sourceStack.spacing = 7
 
         let titleQuick = sectionLabel("OUTPUT")
-        let titleContext = sectionLabel("CONTESTO · ZSH OPZIONALE")
+        let titleContext = sectionLabel("CONTESTO · RICHIEDE ZSH")
 
         let actions = NSStackView()
         actions.orientation = .vertical
@@ -310,11 +312,7 @@ final class TerminalClipApp: NSObject {
                           primary: true, target: self, action: #selector(copyOutput)),
             ClipActionRow(title: "Ultime 100 righe",
                           detail: "Solo la parte finale dei log",
-                          symbol: "text.alignleft", target: self, action: #selector(copyTail)),
-            ClipActionRow(title: "Report diagnostico",
-                          detail: "Comando, esito, durata e output",
-                          symbol: "doc.text.magnifyingglass",
-                          target: self, action: #selector(copyReport))
+                          symbol: "text.alignleft", target: self, action: #selector(copyTail))
         ] {
             actions.addArrangedSubview(row)
             row.widthAnchor.constraint(equalTo: actions.widthAnchor).isActive = true
@@ -325,6 +323,10 @@ final class TerminalClipApp: NSObject {
         context.alignment = .leading
         context.spacing = 5
         for row in [
+            ClipActionRow(title: "Report diagnostico",
+                          detail: "Comando, esito, durata e output",
+                          symbol: "doc.text.magnifyingglass",
+                          target: self, action: #selector(copyReport)),
             ClipActionRow(title: "Ultimo comando",
                           detail: "Testo del comando eseguito",
                           symbol: "chevron.left.forwardslash.chevron.right",
@@ -394,6 +396,7 @@ final class TerminalClipApp: NSObject {
             ? "Terminal.app disponibile"
             : "Terminal.app non aperto"
         sourceStatus.textColor = running ? .secondaryLabelColor : .systemOrange
+        sourceDot.contentTintColor = running ? .systemGreen : .systemOrange
     }
 
     private func installHotkey() {
