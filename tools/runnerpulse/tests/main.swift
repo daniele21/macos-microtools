@@ -44,4 +44,40 @@ let run = try decoder.decode(WorkflowRun.self, from: Data(#"""
 let observed = ObservedJob(repository: "owner/project", run: run, job: job)
 check(observed.branch == "main" && observed.runnerName == "mac-studio", "job to run attribution")
 check(observed.id == "owner/project/24/123", "stable job id")
+
+
+// Local Python monitor -> native Swift consumer JSON contract.
+let localJSON = Data(#"""
+{
+  "schema_version": 1, "runner_id": 2, "session_id": "session-x", "pid": 512,
+  "updated_at": 1000.0, "status": "running",
+  "job": {
+    "name": "analyze", "repository": "daniele21/source-repo",
+    "sha": "bada551234", "workflow": "Central CI",
+    "event_name": "repository_dispatch", "started_at": 950.0,
+    "current_step": "Validate frozen source", "steps": ["Checkout", "Validate frozen source"]
+  },
+  "recent_events": [{
+    "time": 990.0, "kind": "step_started", "name": "analyze",
+    "repository": "daniele21/source-repo", "step": "Validate frozen source"
+  }]
+}
+"""#.utf8)
+let local = try JSONDecoder().decode(RunnerPulseLocalSnapshot.self, from: localJSON)
+check(local.runner_id == 2 && local.job?.repository == "daniele21/source-repo", "local origin repo")
+check(local.job?.current_step == "Validate frozen source", "local step")
+check(local.isFresh(now: Date(timeIntervalSince1970: 1003.0)), "local live heartbeat")
+check(!local.isFresh(now: Date(timeIntervalSince1970: 1010.0)), "stale is not online")
+check(local.recent_events.count == 1, "local event decode")
+
+let dir = FileManager.default.temporaryDirectory
+    .appendingPathComponent("runnerpulse-test-\(UUID().uuidString)")
+try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+defer { try? FileManager.default.removeItem(at: dir) }
+try localJSON.write(to: dir.appendingPathComponent("runner-2.json"))
+check(RunnerPulseLocalReader.load(from: dir).count == 1, "single file per runner")
+let invalid = Data(#"{"schema_version":5,"runner_id":1,"session_id":"x","pid":1,"updated_at":1000,"status":"idle","job":null,"recent_events":[]}"#.utf8)
+try invalid.write(to: dir.appendingPathComponent("runner-1.json"))
+check(RunnerPulseLocalReader.load(from: dir).count == 1, "reject unsupported schema")
+
 print("RunnerPulse model checks passed")
