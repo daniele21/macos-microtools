@@ -1,4 +1,4 @@
-# TerminalClip · MVP 0.1
+# TerminalClip · UI 0.2 (MVP)
 
 Native macOS menu-bar utility that copies marked output from Apple Terminal.app. One Swift source file, no external libraries.
 
@@ -23,6 +23,28 @@ The redesigned popover follows the keyboard-first simplicity of [Maccy](https://
 - **No new dependencies or background collection.** Native UI only; no stored output history.
 
 The interface retains the limitations of native Terminal.app marks; its visual polish does not imply byte-perfect stdout/stderr capture.
+
+## If you still see the old grey buttons
+
+The old interface says **"Copia dal tab corrente di Terminal.app"** and uses five identical grey buttons. The redesigned interface says **"Dall'output agli appunti in un clic"**, has **OUTPUT** and **CONTESTO** groups, and shows **v0.2** near the title.
+
+After fetching the branch, **force rebuild and relaunch** the installed app instead of simply running `open` (which can reuse an older process):
+
+~~~bash
+git fetch origin
+git switch feat/terminalclip-mvp
+git pull --ff-only
+make refresh-terminalclip
+~~~
+
+This command rebuilds from source even if local timestamps are misleading, closes existing TerminalClip processes, installs the bundle at `~/.local/opt/TerminalClip.app`, and opens this exact bundle. It does not affect MenuMeter. If the old UI remains, inspect all running copies and the version:
+
+~~~bash
+ps -axo pid,command | grep '[T]erminalClip'
+/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$HOME/.local/opt/TerminalClip.app/Contents/Info.plist"
+~~~
+
+The version should be **0.2.0**. If a TerminalClip process is running from another path, quit it and relaunch the installed bundle above. On macOS the global shortcut can also conflict with an old Automator binding.
 
 ## Install
 
