@@ -22,7 +22,7 @@ echo "✓ TerminalClip installed to $HOME/.local/opt/TerminalClip.app"
 
 echo "==> Building RunnerPulse..."
 mkdir -p "$HOME/.local/opt/RunnerPulse.app/Contents/MacOS"
-swiftc -O -framework AppKit -framework SwiftUI -framework Security \
+swiftc -parse-as-library -O -framework AppKit -framework SwiftUI -framework Security \
   tools/runnerpulse/runnerpulse.swift \
   -o "$HOME/.local/opt/RunnerPulse.app/Contents/MacOS/RunnerPulse"
 cp tools/runnerpulse/Info.plist "$HOME/.local/opt/RunnerPulse.app/Contents/Info.plist"
