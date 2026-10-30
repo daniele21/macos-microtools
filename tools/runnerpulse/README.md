@@ -2,6 +2,49 @@
 
 A zero-dependency, Swift-native menu bar tool showing **which self-hosted runner is busy, which repository and job is using it, the current step, queues, runtime and recent failures**. Built with Apple AppKit, SwiftUI, Foundation and Security; no background agent or telemetry daemon.
 
+## Local-first dashboard (preferred on your runner Mac)
+
+RunnerPulse now defaults to a **read-only local dashboard**, not the GitHub
+access-token setup modal. It consumes a secure per-runner JSON snapshot written
+by your existing foreground runner monitor in the separate repository
+"local-runner-infra". You do not need a GitHub token or repository list to see
+these 4 local workers.
+
+To enable, first update local-runner-infra and its
+scripts/runner_monitor/status.py bridge, then restart its foreground "runners"
+command **only after any running jobs finish**. Stopping an existing
+interactive monitor can terminate the runners it manages; RunnerPulse itself
+does not launch or stop them.
+
+~~~bash
+cd "$HOME/Personal/local-runner-infra"
+git pull --ff-only
+# Restart your existing "runners" session when it is safe.
+~~~
+
+Then in this microtools repository:
+
+~~~bash
+make refresh-runnerpulse
+~~~
+
+The app reads runner-1.json .. runner-4.json under
+"~/Library/Application Support/RunnerPulse/runners/" once a second and shows
+runner-colored cards, origin repository, current step, elapsed time, and recent
+job events. Each file gets a heartbeat every ~1s. If the writer stops or
+is older than 6 seconds, the card is "NON OSSERVATO" rather than claiming the
+runner is idle/offline. Missing runner files are shown as unknown, not offline.
+
+The GitHub token settings remain available from the gear icon and are optional.
+The existing REST API dashboard is a fallback if local snapshots do not exist.
+Local mode does not attempt to show the GitHub queue, because a local worker
+cannot know the complete remote queue from its logs.
+
+**Privacy:** telemetry contains job metadata and recent lifecycle events,
+not raw logs, job output, credentials or repository contents. Files are
+written atomically with owner-only permissions. RunnerPulse never creates a
+second runner process.
+
 ## Install
 
 Requires macOS 13+ and Apple Command Line Tools:

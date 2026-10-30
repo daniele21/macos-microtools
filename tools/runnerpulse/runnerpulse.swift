@@ -161,6 +161,70 @@ struct RunnerPulseSnapshot {
     var longCount: Int { running.filter { $0.isLongRunning }.count }
 }
 
+// MARK: - Local foreground-runner telemetry (no GitHub credentials)
+
+struct RunnerPulseLocalJob: Decodable {
+    let name: String?
+    let repository: String?
+    let sha: String?
+    let workflow: String?
+    let event_name: String?
+    let started_at: Double
+    let current_step: String?
+    let steps: [String]?
+}
+
+struct RunnerPulseLocalEvent: Decodable, Identifiable {
+    let time: Double
+    let kind: String
+    let name: String?
+    let repository: String?
+    let result: String?
+    let duration_seconds: Double?
+    let step: String?
+    var id: String { "\(time)-\(kind)-\(name ?? "")-\(step ?? "")" }
+}
+
+struct RunnerPulseLocalSnapshot: Decodable, Identifiable {
+    let schema_version: Int
+    let runner_id: Int
+    let session_id: String
+    let pid: Int
+    let updated_at: Double
+    let status: String
+    let job: RunnerPulseLocalJob?
+    let recent_events: [RunnerPulseLocalEvent]
+
+    var id: Int { runner_id }
+
+    func isFresh(now: Date = Date()) -> Bool {
+        let age = now.timeIntervalSince1970 - updated_at
+        return schema_version == 1 && age >= -5 && age <= 6
+    }
+    var isRunning: Bool { isFresh() && status == "running" && job != nil }
+    var isIdle: Bool { isFresh() && status == "idle" }
+}
+
+enum RunnerPulseLocalReader {
+    static func defaultDirectory() -> URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/RunnerPulse/runners", isDirectory: true)
+    }
+
+    static func load(from directory: URL = defaultDirectory()) -> [RunnerPulseLocalSnapshot] {
+        let decoder = JSONDecoder()
+        return (1...4).compactMap { id in
+            let file = directory.appendingPathComponent("runner-\(id).json")
+            guard let attrs = try? FileManager.default.attributesOfItem(atPath: file.path),
+                  let bytes = attrs[.size] as? NSNumber, bytes.intValue <= 128 * 1024,
+                  let data = try? Data(contentsOf: file),
+                  let snapshot = try? decoder.decode(RunnerPulseLocalSnapshot.self, from: data),
+                  snapshot.runner_id == id && snapshot.schema_version == 1 else { return nil }
+            return snapshot
+        }
+    }
+}
+
 enum RunnerAPIError: LocalizedError {
     case invalidResponse(Int)
     case api(Int, String)
@@ -368,6 +432,8 @@ final class RunnerPulseState: ObservableObject {
     // The current macOS CLT SDK requires a SwiftUIMacros plugin for @State
     // that is only bundled with full Xcode. Never persist this draft.
     @Published var pendingToken = ""
+    @Published var localSnapshots: [RunnerPulseLocalSnapshot] = []
+    private var localTimer: Timer?
     private var token: String?
     private var lastRequest: Date?
     private var generation = 0
@@ -377,7 +443,8 @@ final class RunnerPulseState: ObservableObject {
         repositoriesText = UserDefaults.standard.string(forKey: "runnerpulse.repositories") ?? ""
         organizationsText = UserDefaults.standard.string(forKey: "runnerpulse.organizations") ?? ""
         token = RunnerPulseKeychain.read()
-        showSettings = token == nil || RunnerPulseCore.validRepositories(repositoriesText).isEmpty
+        // Local dashboard is the default: never force a GitHub auth dialog on launch.
+        showSettings = false
     }
 
     var configured: Bool {
@@ -423,7 +490,19 @@ final class RunnerPulseState: ObservableObject {
         showSettings = true
     }
 
-    func start() { refresh(force: true) }
+    var hasLocalTelemetry: Bool { !localSnapshots.isEmpty }
+
+    func pollLocal() {
+        localSnapshots = RunnerPulseLocalReader.load()
+    }
+
+    func start() {
+        pollLocal()
+        localTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            self?.pollLocal()
+        }
+        refresh(force: true) // Optional GitHub view remains available when configured.
+    }
 
     func refresh(force: Bool = false) {
         guard configured, !refreshing, let token else { return }
@@ -611,6 +690,157 @@ private struct RunnerPulseSettings: View {
     }
 }
 
+// MARK: - Local runner activity (read-only)
+
+private struct LocalDashboard: View {
+    let snapshots: [RunnerPulseLocalSnapshot]
+
+    private func runnerColor(_ id: Int) -> Color {
+        switch id {
+        case 1: return .cyan
+        case 2: return .purple
+        case 3: return .yellow
+        default: return .green
+        }
+    }
+
+    private var live: [RunnerPulseLocalSnapshot] { snapshots.filter { $0.isFresh() } }
+    private var events: [(Int, RunnerPulseLocalEvent)] {
+        Array(snapshots.flatMap { snap in
+            snap.recent_events.map { (snap.runner_id, $0) }
+        }.sorted { $0.1.time > $1.1.time }.prefix(12))
+    }
+
+    private func eventTitle(_ event: RunnerPulseLocalEvent) -> String {
+        switch event.kind {
+        case "job_started": return "Avvio: \(event.name ?? "job")"
+        case "job_completed": return "\(event.name ?? "job") · \(event.result ?? "completato")"
+        case "step_started": return event.step ?? "Step"
+        case "runner_started": return "Runner avviato"
+        case "runner_stopped": return "Runner terminato"
+        default: return event.kind
+        }
+    }
+
+    var body: some View {
+        HStack {
+            Label("Locale · live", systemImage: "desktopcomputer")
+                .foregroundStyle(Color.green)
+            Spacer()
+            Text("\(live.filter { $0.isRunning }.count) running")
+            Text("\(live.filter { $0.isIdle }.count) idle")
+        }
+        .font(.system(size: 11, weight: .medium))
+        .padding(.horizontal, 16).padding(.vertical, 10)
+        Divider()
+        ScrollView {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Text("WORKERS").tracking(0.8)
+                    Spacer()
+                    Text("\(live.count)/4 osservati")
+                }
+                .font(.system(size: 10, weight: .semibold)).foregroundStyle(.secondary)
+
+                ForEach(1...4, id: \.self) { id in
+                    let item = snapshots.first { $0.runner_id == id }
+                    let fresh = item?.isFresh() == true
+                    HStack(alignment: .top, spacing: 10) {
+                        RoundedRectangle(cornerRadius: 3)
+                            .fill(fresh ? runnerColor(id) : Color.gray.opacity(0.4))
+                            .frame(width: 4)
+                        VStack(alignment: .leading, spacing: 5) {
+                            HStack {
+                                Text("runner-\(id)")
+                                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                                Text(fresh ? (item?.status.uppercased() ?? "UNKNOWN") : "NON OSSERVATO")
+                                    .font(.system(size: 9, weight: .medium))
+                                    .foregroundStyle(fresh ? runnerColor(id) : Color.secondary)
+                                Spacer()
+                                if fresh, let start = item?.job?.started_at {
+                                    Text(RunnerPulseCore.duration(
+                                        ISO8601DateFormatter().string(from: Date(timeIntervalSince1970: start))))
+                                        .font(.system(size: 10, design: .monospaced))
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            if fresh, item?.status == "running", let job = item?.job {
+                                Text(job.repository ?? "Repository in identificazione…")
+                                    .font(.system(size: 11, weight: .semibold)).lineLimit(1)
+                                Text(job.name ?? "Job")
+                                    .font(.system(size: 11)).lineLimit(1)
+                                if let step = job.current_step {
+                                    Label(step, systemImage: "chevron.right")
+                                        .font(.system(size: 10)).foregroundStyle(.secondary)
+                                        .lineLimit(2)
+                                }
+                                if let sha = job.sha {
+                                    Text("Commit \(String(sha.prefix(8)))")
+                                        .font(.system(size: 9, design: .monospaced))
+                                        .foregroundStyle(.tertiary)
+                                }
+                            } else {
+                                Text(fresh ? (item?.status == "idle" ? "In ascolto di nuovi job" :
+                                                "Sessione \(item?.status ?? "sconosciuta")")
+                                    : "Nessun segnale recente · stato non verificato")
+                                    .font(.system(size: 10)).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 9))
+                }
+
+                if live.isEmpty {
+                    Label("Monitor locale non aggiornato. Avvia runners dalla versione aggiornata di local-runner-infra.", systemImage: "info.circle")
+                        .font(.system(size: 10)).foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                HStack {
+                    Text("ATTIVITÀ RECENTI").tracking(0.8)
+                    Spacer()
+                    Text("\(events.count) eventi")
+                }
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.secondary).padding(.top, 6)
+
+                ForEach(events.indices, id: \.self) { index in
+                    let (id, event) = events[index]
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: event.kind == "job_completed" ? "checkmark.circle.fill" : "circle.fill")
+                            .font(.system(size: 10))
+                            .foregroundStyle(event.kind == "job_completed"
+                                ? (event.result?.lowercased() == "succeeded" ? Color.green : Color.red)
+                                : runnerColor(id))
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("runner-\(id) · \(eventTitle(event))")
+                                .font(.system(size: 10)).lineLimit(2)
+                            if let repo = event.repository {
+                                Text(repo).font(.system(size: 9))
+                                    .foregroundStyle(.secondary).lineLimit(1)
+                            }
+                        }
+                        Spacer()
+                        Text(Date(timeIntervalSince1970: event.time)
+                            .formatted(date: .omitted, time: .shortened))
+                            .font(.system(size: 9, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.vertical, 3)
+                }
+                if events.isEmpty {
+                    Text("Nessun evento nella sessione corrente")
+                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                }
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
 private struct RunnerPulsePanel: View {
     @ObservedObject var state: RunnerPulseState
     var body: some View {
@@ -631,14 +861,17 @@ private struct RunnerPulsePanel: View {
             }
             .padding(16)
             Divider()
-            if !state.configured {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Collega GitHub").font(.headline)
-                    Text("Aggiungi un token e i repository per vedere i job sui runner self-hosted.")
+            if state.hasLocalTelemetry {
+                LocalDashboard(snapshots: state.localSnapshots)
+            } else if !state.configured {
+                VStack(alignment: .leading, spacing: 12) {
+                    Label("Monitor locale", systemImage: "desktopcomputer").font(.headline)
+                    Text("Nessuna telemetria locale. Aggiorna local-runner-infra e riavvia il comando runners quando non ci sono job in esecuzione.")
                         .font(.system(size: 12)).foregroundStyle(.secondary)
-                    Button("Configura") { state.showSettings = true }
-                        .buttonStyle(.borderedProminent)
-                }.padding(20)
+                    Text("La dashboard leggerà automaticamente i runner senza richiedere un token GitHub.")
+                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                    Button("Configura GitHub remoto (facoltativo)") { state.showSettings = true }
+                }.padding(18)
                 Spacer()
             } else {
                 HStack(spacing: 13) {
@@ -711,10 +944,12 @@ private struct RunnerPulsePanel: View {
             }
             Divider()
             HStack {
-                if let date = state.snapshot.lastUpdated {
-                    Text("Aggiornato \(date.formatted(date: .omitted, time: .standard))")
+                if state.hasLocalTelemetry {
+                    Text("Dati locali · aggiornamento ogni 1s")
+                } else if let date = state.snapshot.lastUpdated {
+                    Text("GitHub · \(date.formatted(date: .omitted, time: .standard))")
                 } else {
-                    Text("Non ancora aggiornato")
+                    Text("In attesa di telemetria")
                 }
                 Spacer()
                 Button("GitHub") {
@@ -766,6 +1001,12 @@ final class RunnerPulseAppDelegate: NSObject, NSApplicationDelegate {
         popover.behavior = .transient
         popover.contentSize = NSSize(width: 430, height: 545)
         popover.contentViewController = NSHostingController(rootView: RunnerPulsePanel(state: state))
+        state.$localSnapshots.sink { [weak self] _ in
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.updateStatus(self.state.snapshot)
+            }
+        }.store(in: &subscriptions)
         state.$snapshot.sink { [weak self] snap in
             DispatchQueue.main.async { [weak self] in self?.updateStatus(snap) }
         }.store(in: &subscriptions)
@@ -775,14 +1016,22 @@ final class RunnerPulseAppDelegate: NSObject, NSApplicationDelegate {
 
     private func updateStatus(_ snapshot: RunnerPulseSnapshot) {
         guard let button = item.button else { return }
-        if !state.configured {
-            button.title = " Set up"
+        if state.hasLocalTelemetry {
+            let live = state.localSnapshots.filter { $0.isFresh() }
+            let active = live.filter { $0.isRunning }.count
+            button.title = " \(active)/\(live.count)"
+            button.contentTintColor = live.isEmpty ? .systemOrange : nil
+            button.toolTip = "RunnerPulse locale · \(active) job su \(live.count) runner osservati"
+        } else if !state.configured {
+            button.title = ""
+            button.contentTintColor = .systemOrange
+            button.toolTip = "RunnerPulse · avvia il monitor locale con runners"
         } else {
             button.title = snapshot.running.isEmpty ? "" : " \(snapshot.running.count)"
+            button.contentTintColor = snapshot.offlineCount > 0 || !snapshot.errors.isEmpty
+                ? .systemOrange : nil
+            button.toolTip = "RunnerPulse GitHub · \(snapshot.running.count) job in esecuzione, \(snapshot.queued.count) in coda"
         }
-        button.contentTintColor = snapshot.offlineCount > 0 || !snapshot.errors.isEmpty
-            ? .systemOrange : nil
-        button.toolTip = "RunnerPulse · \(snapshot.running.count) job in esecuzione, \(snapshot.queued.count) in coda"
     }
 
     @objc private func togglePopover() {
