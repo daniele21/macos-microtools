@@ -29,7 +29,7 @@ install-terminalclip: bin/TerminalClip.app/Contents/MacOS/TerminalClip
 test-terminalclip: | bin
 	$(SWIFTC) -D TERMINALCLIP_TEST tools/terminalclip/terminalclip.swift tools/terminalclip/tests/main.swift -o bin/terminalclip-tests
 	./bin/terminalclip-tests
-	@if [ "$(uname -s)" = Darwin ]; then $(SWIFTC) -typecheck -framework AppKit -framework ApplicationServices -framework Carbon tools/terminalclip/terminalclip.swift; fi
+	@if [ "$$(uname -s)" = Darwin ]; then $(SWIFTC) -typecheck -framework AppKit -framework ApplicationServices -framework Carbon tools/terminalclip/terminalclip.swift; fi
 
 install: build
 	mkdir -p $(PREFIX)
@@ -40,7 +40,7 @@ install: build
 
 uninstall-terminalclip:
 	-pkill -x TerminalClip 2>/dev/null
-	-launchctl bootout gui/$(id -u)/com.terminalclip.local >/dev/null 2>&1
+	-launchctl bootout gui/$$(id -u)/com.terminalclip.local >/dev/null 2>&1
 	rm -f $(HOME)/Library/LaunchAgents/com.terminalclip.local.plist
 	rm -rf $(HOME)/.local/opt/TerminalClip.app
 	@echo "✓ TerminalClip removed (Zsh configuration left untouched)"
