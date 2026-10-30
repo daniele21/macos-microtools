@@ -310,7 +310,7 @@ struct RunnerPulseAPI {
     }
 }
 
-#if canImport(AppKit)
+#if canImport(AppKit) && !RUNNERPULSE_TEST
 import AppKit
 import SwiftUI
 import Security
@@ -501,7 +501,7 @@ private struct RunnerRow: View {
                         Spacer()
                         Text(runner.status == "offline" ? "Offline" : runner.busy ? "Busy" : "Idle")
                             .font(.system(size: 10, weight: .medium))
-                            .foregroundStyle(runner.status == "offline" ? .red : .secondary)
+                            .foregroundStyle(runner.status == "offline" ? Color.red : Color.secondary)
                     }
                     if let job = runner.job {
                         JobSubline(job: job)
