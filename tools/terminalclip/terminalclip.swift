@@ -275,7 +275,11 @@ final class TerminalClipApp: NSObject {
         copying = true
         let pasteboard = NSPasteboard.general
         let before = pasteboard.changeCount
-        _ = app.activate(options: [.activateIgnoringOtherApps])
+        if #available(macOS 14.0, *) {
+            app.activate()
+        } else {
+            _ = app.activate(options: [.activateIgnoringOtherApps])
+        }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
             self?.sendKey(CGKeyCode(kVK_ANSI_A), modifiers: [.maskCommand, .maskShift])
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.20) { [weak self] in
@@ -321,9 +325,11 @@ final class TerminalClipApp: NSObject {
     }
 }
 
-let application = NSApplication.shared
-application.setActivationPolicy(.accessory)
-let terminalClip = TerminalClipApp()
-application.run()
-withExtendedLifetime(terminalClip) {}
+let _ = {
+    let application = NSApplication.shared
+    application.setActivationPolicy(.accessory)
+    let terminalClip = TerminalClipApp()
+    application.run()
+    withExtendedLifetime(terminalClip) {}
+}()
 #endif
