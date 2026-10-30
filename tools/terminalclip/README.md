@@ -1,0 +1,80 @@
+# TerminalClip · MVP 0.1
+
+Native macOS menu-bar utility that copies marked output from Apple Terminal.app. One Swift source file, no external libraries.
+
+## Features
+
+- Shortcut ⌘⌥C: copy last marked output
+- Popover: copy full output, last 100 lines, command, working directory, or diagnostic report
+- Cleans ANSI escape sequences
+- Optional Zsh hooks add command, PWD, exit code, duration, and timestamp
+- No automatic logging of output, network calls or cloud services
+- Optional start at login
+
+## Install
+
+macOS 13+ and Xcode Command Line Tools. From the repository root:
+
+~~~bash
+make install-terminalclip
+open "$HOME/.local/opt/TerminalClip.app"
+~~~
+
+Alternatively, `make install` or `bash install.sh` installs both MenuMeter and TerminalClip. Installation does not activate the hook, autostart, or start the app.
+
+To enable optional metadata capture explicitly:
+
+~~~bash
+bash tools/terminalclip/install-zsh.sh
+~~~
+
+Open a new Terminal tab. This adds a single idempotent line to `~/.zshrc`. The hook records the **last completed command** per local TTY.
+
+Enable or disable start at next login:
+
+~~~bash
+bash tools/terminalclip/login.sh enable
+bash tools/terminalclip/login.sh disable
+~~~
+
+## Permissions and shortcut
+
+- Allow TerminalClip in **System Settings → Privacy & Security → Accessibility** to send ⌘⇧A and ⌘C to Terminal.app.
+- If using the Zsh hook, allow **Automation → Terminal** when prompted, to read the selected tab's TTY.
+- Remove any existing global ⌘⌥C Automator shortcut if you want TerminalClip's shortcut to work; the menu remains available.
+
+## Manual smoke test
+
+1. Enable automatic prompt marks in Terminal.app → Edit → Marks.
+2. Run `printf 'TerminalClip example\nsecond line\n'`.
+3. Verify the native ⌘⇧A then ⌘C sequence copies the expected block (which may include prompt/command).
+4. Open TerminalClip and press ⌘⌥C, then paste into a text editor.
+5. With the optional hook enabled, run `false` in a new tab, then test command and diagnostic report actions.
+6. Repeat across two tabs to verify session matching.
+
+Run core checks and macOS typecheck:
+
+~~~bash
+make test-terminalclip
+~~~
+
+## Limitations and privacy
+
+- Apple Terminal.app only. Copy depends on native marks and scrollback, not a byte-for-byte stream recording. stdout/stderr are not separable, and prompts or commands can be included.
+- Selecting output activates Terminal.app. A changed clipboard is used to detect successful copying; clipboard changes made simultaneously by other apps may affect detection.
+- Optional Zsh hook saves the last local command and its metadata in `~/Library/Application Support/TerminalClip/state/` with restrictive permissions. **Command lines may include secrets**. Files are deleted on normal shell exit or TTY reuse, but can survive crashes. Do not enable the hook if that risk is unacceptable.
+- Metadata of commands run inside SSH/remote shells is not available. Output and metadata can diverge if a different marked block is selected.
+- Copied text uses the normal macOS clipboard; Universal Clipboard may sync it if enabled.
+- No silent output capture, no persistent output history, no upload.
+
+## Uninstall
+
+~~~bash
+make uninstall-terminalclip
+~~~
+
+This removes the app and login plist but leaves the optional `~/.zshrc` source line and state untouched. Inspect and remove the hook and files separately if desired.
+
+## Validation
+
+The pure-Swift unit checks can run without AppKit. Full AppKit/Carbon compilation, permission prompts, marks selection and live clipboard behavior must be validated on macOS.

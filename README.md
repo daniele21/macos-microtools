@@ -21,6 +21,7 @@ Most modern macOS utilities suffer from feature creep: multi-gigabyte Electron r
 | Tool | Description | Status |
 | :--- | :--- | :--- |
 | [**MenuMeter**](tools/menumeter/) | Minimalist CPU, RAM, Memory Pressure, Swap I/O, Thermal State, and Top Process dashboard in your menu bar. | Stable (v3) |
+| [**TerminalClip**](tools/terminalclip/) | Copy Terminal.app output with ⌘⌥C, optional Zsh command/exit code metadata and diagnostic reports. | MVP (0.1; macOS smoke test pending) |
 
 *More tools (local port monitor, AI VRAM monitor, and sleep toggles) are planned.*
 
@@ -52,6 +53,13 @@ To run MenuMeter:
 ```bash
 menumeter &
 ```
+
+To launch TerminalClip:
+```bash
+open "$HOME/.local/opt/TerminalClip.app"
+```
+
+TerminalClip's optional Zsh metadata capture is **disabled by default**. For setup, privacy caveats and testing see [TerminalClip](tools/terminalclip/README.md). Install only TerminalClip with `make install-terminalclip` and test it with `make test-terminalclip`.
 
 ---
 
