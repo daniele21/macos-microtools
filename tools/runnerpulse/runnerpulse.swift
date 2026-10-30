@@ -364,6 +364,10 @@ final class RunnerPulseState: ObservableObject {
     @Published var settingsError: String?
     @Published var repositoriesText: String
     @Published var organizationsText: String
+    // Transient token input lives in the existing ObservableObject, not @State.
+    // The current macOS CLT SDK requires a SwiftUIMacros plugin for @State
+    // that is only bundled with full Xcode. Never persist this draft.
+    @Published var pendingToken = ""
     private var token: String?
     private var lastRequest: Date?
     private var generation = 0
@@ -402,6 +406,7 @@ final class RunnerPulseState: ObservableObject {
         UserDefaults.standard.set(orgs.joined(separator: "\n"), forKey: "runnerpulse.organizations")
         repositoriesText = repos.joined(separator: "\n")
         organizationsText = orgs.joined(separator: "\n")
+        pendingToken = ""
         settingsError = nil
         showSettings = false
         refresh(force: true)
@@ -413,6 +418,7 @@ final class RunnerPulseState: ObservableObject {
             return
         }
         token = nil
+        pendingToken = ""
         snapshot = RunnerPulseSnapshot()
         showSettings = true
     }
@@ -557,14 +563,17 @@ private struct SimpleJobRow: View {
 
 private struct RunnerPulseSettings: View {
     @ObservedObject var state: RunnerPulseState
-    @State private var newToken = ""
+    // Bind the SecureField to RunnerPulseState's @Published draft.
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
                 Text("Impostazioni GitHub").font(.headline)
                 Spacer()
                 if state.configured {
-                    Button("Chiudi") { state.showSettings = false }
+                    Button("Chiudi") {
+                        state.pendingToken = ""
+                        state.showSettings = false
+                    }
                 }
             }
             Text("Repository da monitorare (uno per riga, owner/repo)")
@@ -579,7 +588,7 @@ private struct RunnerPulseSettings: View {
                 .textFieldStyle(.roundedBorder)
             Text("GitHub token · lasciando vuoto mantieni quello esistente")
                 .font(.system(size: 11, weight: .medium))
-            SecureField("github_pat_…", text: $newToken)
+            SecureField("github_pat_…", text: $state.pendingToken)
                 .textFieldStyle(.roundedBorder)
             Text("Token solo nel Portachiavi macOS. Permessi: Actions:read; Administration:read per runner repo; Self-hosted runners:read per org.")
                 .font(.system(size: 10))
@@ -593,8 +602,7 @@ private struct RunnerPulseSettings: View {
                 }
                 Spacer()
                 Button("Salva e aggiorna") {
-                    state.saveSettings(token: newToken)
-                    newToken = ""
+                    state.saveSettings(token: state.pendingToken)
                 }.buttonStyle(.borderedProminent)
             }
         }
