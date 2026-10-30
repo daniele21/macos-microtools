@@ -1,0 +1,16 @@
+# OS files
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Build artifacts & binaries
+bin/
+*.o
+*.swiftdoc
+*.swiftmodule
+/menumeter
+
+# Logs & temp
+*.log
+/tmp/
