@@ -73,11 +73,12 @@ check(local.recent_events.count == 1, "local event decode")
 let dir = FileManager.default.temporaryDirectory
     .appendingPathComponent("runnerpulse-test-\(UUID().uuidString)")
 try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-defer { try? FileManager.default.removeItem(at: dir) }
+
 try localJSON.write(to: dir.appendingPathComponent("runner-2.json"))
 check(RunnerPulseLocalReader.load(from: dir).count == 1, "single file per runner")
 let invalid = Data(#"{"schema_version":5,"runner_id":1,"session_id":"x","pid":1,"updated_at":1000,"status":"idle","job":null,"recent_events":[]}"#.utf8)
 try invalid.write(to: dir.appendingPathComponent("runner-1.json"))
 check(RunnerPulseLocalReader.load(from: dir).count == 1, "reject unsupported schema")
 
+try? FileManager.default.removeItem(at: dir)
 print("RunnerPulse model checks passed")
