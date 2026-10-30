@@ -275,9 +275,16 @@ final class TerminalClipApp: NSObject {
         headerIcon.heightAnchor.constraint(equalToConstant: 24).isActive = true
 
         let heading = label("TerminalClip", size: 16, weight: .semibold)
+        let version = label("v0.2", size: 10, weight: .semibold,
+                            color: .secondaryLabelColor)
+        version.setContentCompressionResistancePriority(.required, for: .horizontal)
+        let titleLine = NSStackView(views: [heading, version])
+        titleLine.orientation = .horizontal
+        titleLine.alignment = .centerY
+        titleLine.spacing = 8
         let tagline = label("Dall'output agli appunti in un clic", size: 11,
                             weight: .regular, color: .secondaryLabelColor)
-        let headingText = NSStackView(views: [heading, tagline])
+        let headingText = NSStackView(views: [titleLine, tagline])
         headingText.orientation = .vertical
         headingText.alignment = .leading
         headingText.spacing = 2
