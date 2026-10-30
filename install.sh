@@ -21,3 +21,4 @@ fi
 echo ""
 echo "To launch MenuMeter now:"
 echo "  ${PREFIX}/menumeter &"
+

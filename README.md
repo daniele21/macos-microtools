@@ -75,3 +75,4 @@ Suggestions and contributions are welcome! If you have ideas for lightweight, si
 ## License
 
 MIT License © 2026 Daniele Moltisanti
+

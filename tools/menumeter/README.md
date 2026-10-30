@@ -48,3 +48,4 @@ swiftc -O tools/menumeter/menumeter.swift -o ~/.local/bin/menumeter
 - **Click on top process**: Bring app to front or open Activity Monitor.
 - **Click "Copia diagnostica"**: Copies diagnostic summary to clipboard.
 - **Click "Esci"**: Terminates MenuMeter cleanly.
+

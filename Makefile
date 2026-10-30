@@ -29,3 +29,4 @@ uninstall:
 
 clean:
 	rm -rf bin
+
