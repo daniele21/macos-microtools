@@ -788,8 +788,13 @@ final class RunnerPulseAppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
-private let runnerPulseApp = NSApplication.shared
-private let runnerPulseDelegate = RunnerPulseAppDelegate()
-runnerPulseApp.delegate = runnerPulseDelegate
-runnerPulseApp.run()
+@main
+struct RunnerPulseMain {
+    static func main() {
+        let app = NSApplication.shared
+        let delegate = RunnerPulseAppDelegate()
+        app.delegate = delegate
+        app.run()
+    }
+}
 #endif
