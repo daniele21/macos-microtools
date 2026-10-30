@@ -1,0 +1,47 @@
+import Foundation
+
+func check(_ condition: @autoclosure () -> Bool, _ message: String) {
+    if !condition() { fputs("FAIL: \(message)\n", stderr); exit(1) }
+}
+
+let decoder = JSONDecoder()
+let jobData = Data(#"""
+{
+  "id": 123, "name": "Render", "status": "in_progress", "conclusion": null,
+  "runner_id": 17, "runner_name": "mac-studio", "labels": ["self-hosted", "macOS"],
+  "html_url": "https://github.com/owner/project/actions/runs/24/job/123",
+  "started_at": "2026-10-30T14:00:00Z",
+  "steps": [
+    {"name": "Checkout", "status": "completed", "conclusion": "success", "number": 1},
+    {"name": "Blender", "status": "in_progress", "conclusion": null, "number": 2},
+    {"name": "Upload", "status": "queued", "conclusion": null, "number": 3}
+  ]
+}
+"""#.utf8)
+let job = try decoder.decode(WorkflowJob.self, from: jobData)
+check(RunnerPulseCore.isSelfHosted(job, knownRunnerIDs: []), "self-hosted label detection")
+check(RunnerPulseCore.currentStep(job) == "Blender", "active step")
+check(RunnerPulseCore.stepCount(job) == "1/3 steps", "step count is not percentage")
+check(RunnerPulseCore.duration(job.started_at, now: RunnerPulseCore.date("2026-10-30T15:05:00Z")!) == "1h 5m", "duration")
+check(RunnerPulseCore.isLongRunning(job.started_at, now: RunnerPulseCore.date("2026-10-30T15:31:00Z")!), "long duration")
+check(!RunnerPulseCore.isLongRunning(job.started_at, now: RunnerPulseCore.date("2026-10-30T15:00:00Z")!), "normal duration")
+check(RunnerPulseCore.date("2026-10-30T15:31:00.123Z") != nil, "ISO8601 fractional time")
+
+let hostedData = Data(#"""
+{"id": 7, "name": "hosted", "status": "queued", "conclusion": null, "runner_id": null,
+"runner_name": null, "labels": ["ubuntu-latest"], "html_url": null, "started_at": null, "steps": null}
+"""#.utf8)
+let hosted = try decoder.decode(WorkflowJob.self, from: hostedData)
+check(!RunnerPulseCore.isSelfHosted(hosted, knownRunnerIDs: []), "do not misclassify hosted")
+check(RunnerPulseCore.isSelfHosted(hosted, knownRunnerIDs: [7]) == false, "nil runner ID cannot match")
+check(RunnerPulseCore.validRepositories("org/a\norg/b,org/a\nbad-name") == ["org/a", "org/b"], "valid normalized repo list")
+check(RunnerPulseCore.validOrganizations("example-org,example-org\nother") == ["example-org", "other"], "organization dedup")
+let run = try decoder.decode(WorkflowRun.self, from: Data(#"""
+{"id":24,"name":"test","display_title":"test","head_branch":"main",
+"html_url":"https://github.com/owner/project/actions/runs/24",
+"status":"in_progress","conclusion":null,"created_at":"2026-10-30T14:00:00Z","updated_at":null}
+"""#.utf8))
+let observed = ObservedJob(repository: "owner/project", run: run, job: job)
+check(observed.branch == "main" && observed.runnerName == "mac-studio", "job to run attribution")
+check(observed.id == "owner/project/24/123", "stable job id")
+print("RunnerPulse model checks passed")
