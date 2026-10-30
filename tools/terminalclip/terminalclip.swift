@@ -89,7 +89,7 @@ import AppKit
 import ApplicationServices
 import Carbon
 
-private enum ClipAction {
+fileprivate enum ClipAction {
     case output, tail, command, directory, report
 }
 
