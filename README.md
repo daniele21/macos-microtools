@@ -22,6 +22,7 @@ Most modern macOS utilities suffer from feature creep: multi-gigabyte Electron r
 | :--- | :--- | :--- |
 | [**MenuMeter**](tools/menumeter/) | Minimalist CPU, RAM, Memory Pressure, Swap I/O, Thermal State, and Top Process dashboard in your menu bar. | Stable (v3) |
 | [**TerminalClip**](tools/terminalclip/) | Copy Terminal.app output with ⌘⌥C, optional Zsh command/exit code metadata and diagnostic reports. | MVP (UI 0.2; macOS interaction test pending) |
+| [**RunnerPulse**](tools/runnerpulse/) | Monitor GitHub Actions self-hosted runners, workflow jobs, current steps, queue and failures in the menu bar. | MVP (v0.1) |
 
 *More tools (local port monitor, AI VRAM monitor, and sleep toggles) are planned.*
 
@@ -54,6 +55,11 @@ To run MenuMeter:
 menumeter &
 ```
 
+To launch RunnerPulse:
+```bash
+open "$HOME/.local/opt/RunnerPulse.app"
+```
+
 To launch TerminalClip:
 ```bash
 open "$HOME/.local/opt/TerminalClip.app"
@@ -64,6 +70,8 @@ If a previous TerminalClip process still shows the original five grey buttons, r
 TerminalClip's optional Zsh metadata capture is **disabled by default**. For setup, privacy caveats and testing see [TerminalClip](tools/terminalclip/README.md). Install only TerminalClip with `make install-terminalclip` and test it with `make test-terminalclip`.
 
 ---
+
+RunnerPulse connects to the GitHub REST API using a fine-grained read-only token saved in macOS Keychain. Configure monitored repositories in its settings. Use `make install-runnerpulse` for only RunnerPulse, `make refresh-runnerpulse` to rebuild and relaunch, and `make test-runnerpulse` for unit and native build checks. See [RunnerPulse setup and permissions](tools/runnerpulse/README.md).
 
 ## Tool Highlights: MenuMeter
 
