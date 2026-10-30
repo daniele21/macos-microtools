@@ -2,7 +2,7 @@ PREFIX ?= $(HOME)/.local/bin
 SWIFTC ?= swiftc
 SWIFTFLAGS = -O
 
-.PHONY: all build install clean uninstall install-terminalclip refresh-terminalclip uninstall-terminalclip test-terminalclip
+.PHONY: all build install clean uninstall install-terminalclip refresh-terminalclip uninstall-terminalclip test-terminalclip build-runnerpulse install-runnerpulse refresh-runnerpulse test-runnerpulse uninstall-runnerpulse
 
 all: build
 
@@ -18,7 +18,7 @@ bin/TerminalClip.app/Contents/MacOS/TerminalClip: tools/terminalclip/terminalcli
 	cp tools/terminalclip/Info.plist bin/TerminalClip.app/Contents/Info.plist
 	-codesign --force --sign - bin/TerminalClip.app
 
-build: bin/menumeter bin/TerminalClip.app/Contents/MacOS/TerminalClip
+build: bin/menumeter bin/TerminalClip.app/Contents/MacOS/TerminalClip bin/RunnerPulse.app/Contents/MacOS/RunnerPulse
 
 install-terminalclip: bin/TerminalClip.app/Contents/MacOS/TerminalClip
 	mkdir -p $(HOME)/.local/opt
@@ -33,6 +33,7 @@ refresh-terminalclip:
 	@pkill -x TerminalClip 2>/dev/null || true
 	@sleep 1
 	$(MAKE) install-terminalclip
+	$(MAKE) install-runnerpulse
 	@open -n "$(HOME)/.local/opt/TerminalClip.app"
 	@echo "✓ TerminalClip refreshed and reopened: $(HOME)/.local/opt/TerminalClip.app"
 	@echo "  The redesigned popover shows v0.2 beside the title."
@@ -56,7 +57,7 @@ uninstall-terminalclip:
 	rm -rf $(HOME)/.local/opt/TerminalClip.app
 	@echo "✓ TerminalClip removed (Zsh configuration left untouched)"
 
-uninstall: uninstall-terminalclip
+uninstall: uninstall-terminalclip uninstall-runnerpulse
 	pkill -x menumeter 2>/dev/null || true
 	rm -f $(PREFIX)/menumeter
 	rm -f $(PREFIX)/menumeter.swift
@@ -66,3 +67,35 @@ uninstall: uninstall-terminalclip
 clean:
 	rm -rf bin
 
+
+
+# RunnerPulse: native AppKit + SwiftUI menu bar utility.
+bin/RunnerPulse.app/Contents/MacOS/RunnerPulse: tools/runnerpulse/runnerpulse.swift tools/runnerpulse/Info.plist | bin
+	mkdir -p bin/RunnerPulse.app/Contents/MacOS
+	$(SWIFTC) $(SWIFTFLAGS) -framework AppKit -framework SwiftUI -framework Security tools/runnerpulse/runnerpulse.swift -o bin/RunnerPulse.app/Contents/MacOS/RunnerPulse
+	cp tools/runnerpulse/Info.plist bin/RunnerPulse.app/Contents/Info.plist
+	-codesign --force --sign - bin/RunnerPulse.app
+
+build-runnerpulse: bin/RunnerPulse.app/Contents/MacOS/RunnerPulse
+
+install-runnerpulse: build-runnerpulse
+	mkdir -p $(HOME)/.local/opt
+	rm -rf $(HOME)/.local/opt/RunnerPulse.app
+	ditto bin/RunnerPulse.app $(HOME)/.local/opt/RunnerPulse.app
+	@echo "✓ RunnerPulse installed to $(HOME)/.local/opt/RunnerPulse.app"
+
+refresh-runnerpulse:
+	$(MAKE) -B build-runnerpulse
+	@pkill -x RunnerPulse 2>/dev/null || true
+	$(MAKE) install-runnerpulse
+	@open -n "$(HOME)/.local/opt/RunnerPulse.app"
+
+test-runnerpulse: | bin
+	$(SWIFTC) -D RUNNERPULSE_TEST tools/runnerpulse/runnerpulse.swift tools/runnerpulse/tests/main.swift -o bin/runnerpulse-tests
+	./bin/runnerpulse-tests
+	@if [ "$$(uname -s)" = Darwin ]; then $(MAKE) build-runnerpulse; fi
+
+uninstall-runnerpulse:
+	-pkill -x RunnerPulse 2>/dev/null
+	rm -rf $(HOME)/.local/opt/RunnerPulse.app
+	@echo "✓ RunnerPulse removed (Keychain entry retained; remove token in app first)"
