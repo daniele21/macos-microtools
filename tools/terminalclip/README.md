@@ -11,6 +11,19 @@ Native macOS menu-bar utility that copies marked output from Apple Terminal.app.
 - No automatic logging of output, network calls or cloud services
 - Optional start at login
 
+## UI design
+
+The redesigned popover follows the keyboard-first simplicity of [Maccy](https://github.com/p0deje/Maccy) and the clear action hierarchy of [Raycast](https://manual.raycast.com/clipboard-history), without adopting their clipboard-history features:
+
+- **Opaque native panel** (~390 pt wide) instead of a translucent system menu.
+- **Prominent primary action** for copying the last output, with ⌘⌥C visible beside it.
+- **Two compact groups:** Output (last output / last 100 lines) and Context (report / command / directory; optional Zsh integration required).
+- **SF Symbols, subtitles and subtle hover highlighting** so actions are quick to distinguish.
+- **Terminal.app availability indicator** shown when the popover opens, and discreet local/private status plus Quit in the footer.
+- **No new dependencies or background collection.** Native UI only; no stored output history.
+
+The interface retains the limitations of native Terminal.app marks; its visual polish does not imply byte-perfect stdout/stderr capture.
+
 ## Install
 
 macOS 13+ and Xcode Command Line Tools. From the repository root:
