@@ -7,7 +7,7 @@
   <key>CFBundleExecutable</key><string>TerminalClip</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleVersion</key><string>1</string>
-  <key>CFBundleShortVersionString</key><string>0.1.0</string>
+  <key>CFBundleShortVersionString</key><string>0.2.0</string>
   <key>LSUIElement</key><true/>
   <key>NSAppleEventsUsageDescription</key>
   <string>TerminalClip legge il TTY del tab selezionato per associare il report ai metadati Zsh.</string>
