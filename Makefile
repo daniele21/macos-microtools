@@ -72,7 +72,7 @@ clean:
 # RunnerPulse: native AppKit + SwiftUI menu bar utility.
 bin/RunnerPulse.app/Contents/MacOS/RunnerPulse: tools/runnerpulse/runnerpulse.swift tools/runnerpulse/Info.plist | bin
 	mkdir -p bin/RunnerPulse.app/Contents/MacOS
-	$(SWIFTC) $(SWIFTFLAGS) -framework AppKit -framework SwiftUI -framework Security tools/runnerpulse/runnerpulse.swift -o bin/RunnerPulse.app/Contents/MacOS/RunnerPulse
+	$(SWIFTC) -parse-as-library $(SWIFTFLAGS) -framework AppKit -framework SwiftUI -framework Security tools/runnerpulse/runnerpulse.swift -o bin/RunnerPulse.app/Contents/MacOS/RunnerPulse
 	cp tools/runnerpulse/Info.plist bin/RunnerPulse.app/Contents/Info.plist
 	-codesign --force --sign - bin/RunnerPulse.app
 
