@@ -2,6 +2,26 @@
 
 A zero-dependency, Swift-native menu bar tool showing **which self-hosted runner is busy, which repository and job is using it, the current step, queues, runtime and recent failures**. Built with Apple AppKit, SwiftUI, Foundation and Security; no background agent or telemetry daemon.
 
+## Per-runner CPU + RAM (minimal)
+
+When a runner executes a job, its existing card shows two narrow bars:
+
+- CPU as a percentage of the **whole Mac's** logical CPU capacity. A busy
+  1-core process on an 8-core Mac shows about 12.5%, not 100%.
+- RAM in GiB, as the summed RSS (resident set size) of Runner.Worker and
+  its currently attached descendant processes, visualized against physical RAM.
+
+These are inexpensive, approximate diagnostics, not precise job accounting:
+shared RSS pages can be counted more than once, detached or reparented
+processes can be missed, and Apple Silicon unified GPU/MLX memory is not
+fully attributable to a worker using process RSS.
+
+Measurements are sampled every ~3 seconds by the local Python observer or
+the foreground monitor. The app reads the existing owner-only status JSON
+once a second, never issues external calls for these measurements, and
+shows a dash rather than a fictitious zero if data is missing or more than
+9 seconds old. No CPU/RAM data is shown for idle runners.
+
 ## Always-on passive monitoring, no terminal (recommended)
 
 When the four existing GitHub Actions runner services are already managed by
