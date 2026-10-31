@@ -169,9 +169,35 @@ struct RunnerPulseLocalJob: Decodable {
     let sha: String?
     let workflow: String?
     let event_name: String?
+    // Optional v1 additions: old monitor snapshots remain readable.
+    let execution_repository: String?
+    let execution_sha: String?
+    let trigger_mode: String?
+    let attribution_status: String?
+    let run_url: String?
     let started_at: Double
     let current_step: String?
     let steps: [String]?
+
+    var originTitle: String {
+        if attribution_status == "unresolved" { return "Origine non verificata" }
+        return repository ?? "Repository in identificazione…"
+    }
+    var triggerTitle: String {
+        switch trigger_mode {
+        case "source_dispatch": return "Dal progetto"
+        case "central_request": return "Richiesta centrale"
+        case "native_workflow": return "Workflow diretto"
+        default: return "Avvio non identificato"
+        }
+    }
+    var sourceCommitURL: String? {
+        guard attribution_status != "unresolved",
+              let repo = repository, let sha = sha,
+              repo.split(separator: "/").count == 2, sha.count == 40,
+              sha.allSatisfy({ $0.isHexDigit }) else { return nil }
+        return "https://github.com/\(repo)/commit/\(sha)"
+    }
 }
 
 struct RunnerPulseLocalEvent: Decodable, Identifiable {
@@ -182,6 +208,9 @@ struct RunnerPulseLocalEvent: Decodable, Identifiable {
     let result: String?
     let duration_seconds: Double?
     let step: String?
+    let execution_repository: String?
+    let trigger_mode: String?
+    let run_url: String?
     var id: String { "\(time)-\(kind)-\(name ?? "")-\(step ?? "")" }
 }
 
@@ -765,20 +794,52 @@ private struct LocalDashboard: View {
                                 }
                             }
                             if fresh, item?.status == "running", let job = item?.job {
-                                Text(job.repository ?? "Repository in identificazione…")
-                                    .font(.system(size: 11, weight: .semibold)).lineLimit(1)
+                                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                                    Text(job.originTitle)
+                                        .font(.system(size: 11, weight: .semibold))
+                                        .foregroundStyle(job.attribution_status == "unresolved" ? Color.orange : Color.primary)
+                                        .lineLimit(1)
+                                    Text(job.triggerTitle)
+                                        .font(.system(size: 9, weight: .medium))
+                                        .foregroundStyle(.secondary)
+                                        .padding(.horizontal, 6).padding(.vertical, 2)
+                                        .background(Color.secondary.opacity(0.10), in: Capsule())
+                                    Spacer(minLength: 0)
+                                }
                                 Text(job.name ?? "Job")
                                     .font(.system(size: 11)).lineLimit(1)
+                                if let executor = job.execution_repository {
+                                    Text("Workflow in \(executor)")
+                                        .font(.system(size: 10)).foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                }
+                                if let workflow = job.workflow {
+                                    Text(workflow)
+                                        .font(.system(size: 10)).foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                }
                                 if let step = job.current_step {
                                     Label(step, systemImage: "chevron.right")
                                         .font(.system(size: 10)).foregroundStyle(.secondary)
                                         .lineLimit(2)
                                 }
-                                if let sha = job.sha {
-                                    Text("Commit \(String(sha.prefix(8)))")
-                                        .font(.system(size: 9, design: .monospaced))
-                                        .foregroundStyle(.tertiary)
+                                HStack(spacing: 12) {
+                                    if let sha = job.sha, let commitURL = job.sourceCommitURL {
+                                        Button("Commit \(String(sha.prefix(8)))") {
+                                            openGitHub(commitURL)
+                                        }
+                                        .buttonStyle(.plain)
+                                        .foregroundStyle(Color.accentColor)
+                                    }
+                                    if let runURL = job.run_url, safeGitHubURL(runURL) != nil {
+                                        Button("Apri run GitHub ↗") {
+                                            openGitHub(runURL)
+                                        }
+                                        .buttonStyle(.plain)
+                                        .foregroundStyle(Color.accentColor)
+                                    }
                                 }
+                                .font(.system(size: 9, design: .monospaced))
                             } else {
                                 Text(fresh ? (item?.status == "idle" ? "In ascolto di nuovi job" :
                                                 "Sessione \(item?.status ?? "sconosciuta")")
@@ -798,6 +859,9 @@ private struct LocalDashboard: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
+                Text("Progetto = codice testato · Workflow = repository che esegue la CI")
+                    .font(.system(size: 9)).foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
                 HStack {
                     Text("ATTIVITÀ RECENTI").tracking(0.8)
                     Spacer()
@@ -820,6 +884,20 @@ private struct LocalDashboard: View {
                             if let repo = event.repository {
                                 Text(repo).font(.system(size: 9))
                                     .foregroundStyle(.secondary).lineLimit(1)
+                            } else if event.trigger_mode == "central_request" {
+                                Text("Origine non verificata")
+                                    .font(.system(size: 9)).foregroundStyle(Color.orange)
+                            }
+                            if let executor = event.execution_repository {
+                                Text("Workflow in \(executor)")
+                                    .font(.system(size: 9)).foregroundStyle(.tertiary)
+                                    .lineLimit(1)
+                            }
+                            if let runURL = event.run_url, safeGitHubURL(runURL) != nil {
+                                Button("Log GitHub ↗") { openGitHub(runURL) }
+                                    .font(.system(size: 9))
+                                    .buttonStyle(.plain)
+                                    .foregroundStyle(Color.accentColor)
                             }
                         }
                         Spacer()
