@@ -70,6 +70,26 @@ check(local.isFresh(now: Date(timeIntervalSince1970: 1003.0)), "local live heart
 check(!local.isFresh(now: Date(timeIntervalSince1970: 1010.0)), "stale is not online")
 check(local.recent_events.count == 1, "local event decode")
 
+check(local.resources == nil, "older snapshots without metrics remain readable")
+
+let resourceSnapshot = Data(#"""
+{
+  "schema_version":1,"runner_id":1,"session_id":"session-m","pid":100,
+  "updated_at":1000,"status":"running","job":null,
+  "resources":{"cpu_percent":18.6,"ram_bytes":6442450944,"system_ram_bytes":17179869184,
+               "process_count":3,"sampled_at":1000},
+  "recent_events":[]
+}
+"""#.utf8)
+let withResources = try JSONDecoder().decode(RunnerPulseLocalSnapshot.self, from: resourceSnapshot)
+check(withResources.resources?.cpu_percent == 18.6, "decode aggregated CPU")
+check(withResources.resources?.process_count == 3, "process tree count")
+check(withResources.resources?.ramGB == 6.0, "bytes to GiB conversion")
+check(withResources.resources?.isValid(now: Date(timeIntervalSince1970: 1004)) == true, "fresh metrics")
+check(withResources.resources?.isValid(now: Date(timeIntervalSince1970: 1010)) == false, "stale metrics hidden")
+check(abs((withResources.resources?.ramFraction ?? 0) - 0.375) < 0.0001, "RAM normalized to physical")
+
+
 check(local.job?.trigger_mode == nil, "older v1 snapshots remain compatible")
 check(local.job?.originTitle == "daniele21/source-repo", "legacy origin fallback")
 
