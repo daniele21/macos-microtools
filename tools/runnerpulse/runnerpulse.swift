@@ -1104,12 +1104,40 @@ private struct RunnerPulsePanel: View {
             }
             .padding(16)
             Divider()
+            if !state.hasLiveLocalSession {
+                VStack(alignment: .leading, spacing: 7) {
+                    HStack {
+                        Button {
+                            state.launchRunnersInBackground()
+                        } label: {
+                            Label(state.launchingRunners ? "Avvio in corso…" : "Avvia runner in background",
+                                  systemImage: "play.circle.fill")
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(state.launchingRunners)
+                        Spacer()
+                        Button("Log avvio") { state.openBackgroundLog() }
+                            .font(.system(size: 10))
+                    }
+                    Text("I runner saranno gestiti da launchd, senza finestra Terminale. Non usa --force e non duplica una sessione attiva.")
+                        .font(.system(size: 10)).foregroundStyle(.secondary)
+                    if let message = state.runnerControlMessage {
+                        Text(message)
+                            .font(.system(size: 10))
+                            .foregroundStyle(message.hasPrefix("Avvio non riuscito") ? Color.red : Color.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 9)
+                Divider()
+            }
             if state.hasLocalTelemetry {
                 LocalDashboard(snapshots: state.localSnapshots)
             } else if !state.configured {
                 VStack(alignment: .leading, spacing: 12) {
                     Label("Monitor locale", systemImage: "desktopcomputer").font(.headline)
-                    Text("Nessuna telemetria locale. Aggiorna local-runner-infra e riavvia il comando runners quando non ci sono job in esecuzione.")
+                    Text("Nessuna telemetria locale ricevuta. Premi Avvia runner in background per avviare i worker senza Terminale, oppure controlla il log di avvio.")
                         .font(.system(size: 12)).foregroundStyle(.secondary)
                     Text("La dashboard leggerà automaticamente i runner senza richiedere un token GitHub.")
                         .font(.system(size: 11)).foregroundStyle(.secondary)
