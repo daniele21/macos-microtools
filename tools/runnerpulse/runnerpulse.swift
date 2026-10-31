@@ -214,6 +214,24 @@ struct RunnerPulseLocalEvent: Decodable, Identifiable {
     var id: String { "\(time)-\(kind)-\(name ?? "")-\(step ?? "")" }
 }
 
+struct RunnerPulseResources: Decodable {
+    let cpu_percent: Double
+    let ram_bytes: Int64
+    let system_ram_bytes: Int64
+    let process_count: Int
+    let sampled_at: Double
+
+    func isValid(now: Date = Date()) -> Bool {
+        let age = now.timeIntervalSince1970 - sampled_at
+        return age >= -5 && age <= 9 &&
+            cpu_percent.isFinite && cpu_percent >= 0 && cpu_percent <= 100 &&
+            ram_bytes >= 0 && system_ram_bytes > 0 && process_count > 0
+    }
+    var ramGB: Double { Double(ram_bytes) / 1_073_741_824 }
+    var cpuFraction: Double { min(1, cpu_percent / 100) }
+    var ramFraction: Double { min(1, Double(ram_bytes) / Double(system_ram_bytes)) }
+}
+
 struct RunnerPulseLocalSnapshot: Decodable, Identifiable {
     let schema_version: Int
     let runner_id: Int
@@ -222,6 +240,7 @@ struct RunnerPulseLocalSnapshot: Decodable, Identifiable {
     let updated_at: Double
     let status: String
     let job: RunnerPulseLocalJob?
+    let resources: RunnerPulseResources?
     let recent_events: [RunnerPulseLocalEvent]
 
     var id: Int { runner_id }
@@ -886,6 +905,52 @@ private struct RunnerPulseSettings: View {
 
 // MARK: - Local runner activity (read-only)
 
+// Only two small measurements; no graph, sensor history or extra window.
+private struct RunnerResourceBars: View {
+    let metrics: RunnerPulseResources?
+
+    private func bar(_ fraction: Double, color: Color) -> some View {
+        GeometryReader { geo in
+            ZStack(alignment: .leading) {
+                Capsule().fill(Color.primary.opacity(0.10))
+                Capsule().fill(color)
+                    .frame(width: max(0, geo.size.width * max(0, min(1, fraction))))
+            }
+        }
+        .frame(height: 4)
+        .accessibilityHidden(true)
+    }
+
+    var body: some View {
+        let active = metrics?.isValid() == true ? metrics : nil
+        HStack(spacing: 14) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text("CPU").foregroundStyle(.secondary)
+                    Spacer(minLength: 4)
+                    Text(active.map { String(format: "%.0f%%", $0.cpu_percent) } ?? "—")
+                        .monospacedDigit()
+                }
+                bar(active?.cpuFraction ?? 0,
+                    color: (active?.cpu_percent ?? 0) >= 75 ? .orange : .cyan)
+            }
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text("RAM").foregroundStyle(.secondary)
+                    Spacer(minLength: 4)
+                    Text(active.map { String(format: "%.1f GB", $0.ramGB) } ?? "—")
+                        .monospacedDigit()
+                }
+                bar(active?.ramFraction ?? 0,
+                    color: (active?.ramFraction ?? 0) >= 0.75 ? .orange : .purple)
+            }
+        }
+        .font(.system(size: 10, weight: .medium))
+        .padding(.top, 3)
+        .help("Uso stimato di Runner.Worker e dei processi figli. CPU: % della capacità totale; RAM: RSS, può includere pagine condivise.")
+    }
+}
+
 private struct LocalDashboard: View {
     let snapshots: [RunnerPulseLocalSnapshot]
 
@@ -1005,6 +1070,7 @@ private struct LocalDashboard: View {
                                     }
                                 }
                                 .font(.system(size: 9, design: .monospaced))
+                                RunnerResourceBars(metrics: item?.resources)
                             } else {
                                 Text(fresh ? (item?.status == "idle" ? "In ascolto di nuovi job" :
                                                 "Sessione \(item?.status ?? "sconosciuta")")
