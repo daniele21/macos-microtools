@@ -2,7 +2,7 @@ PREFIX ?= $(HOME)/.local/bin
 SWIFTC ?= swiftc
 SWIFTFLAGS = -O
 
-.PHONY: all build install clean uninstall install-terminalclip refresh-terminalclip uninstall-terminalclip test-terminalclip build-runnerpulse install-runnerpulse refresh-runnerpulse test-runnerpulse uninstall-runnerpulse
+.PHONY: all build install clean uninstall install-terminalclip refresh-terminalclip uninstall-terminalclip test-terminalclip build-runnerpulse install-runnerpulse refresh-runnerpulse test-runnerpulse uninstall-runnerpulse install-runnerpulse-observer uninstall-runnerpulse-observer
 
 all: build
 
@@ -104,3 +104,13 @@ uninstall-runnerpulse:
 	-pkill -x RunnerPulse 2>/dev/null
 	rm -rf $(HOME)/.local/opt/RunnerPulse.app
 	@echo "✓ RunnerPulse removed (Keychain entry retained; remove token in app first)"
+
+
+# Passive observer is a separate login LaunchAgent. Does not start or stop CI runners.
+install-runnerpulse-observer:
+	/bin/bash tools/runnerpulse/install-observer.sh
+
+uninstall-runnerpulse-observer:
+	-launchctl bootout gui/$$(id -u)/com.daniele.runnerpulse.observer >/dev/null 2>&1
+	rm -f "$(HOME)/Library/LaunchAgents/com.daniele.runnerpulse.observer.plist"
+	@echo "✓ Passive observer removed; GitHub runner services untouched"
