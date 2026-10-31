@@ -2,6 +2,55 @@
 
 A zero-dependency, Swift-native menu bar tool showing **which self-hosted runner is busy, which repository and job is using it, the current step, queues, runtime and recent failures**. Built with Apple AppKit, SwiftUI, Foundation and Security; no background agent or telemetry daemon.
 
+## Start runners directly from the menu bar (no Terminal window)
+
+RunnerPulse can now launch the same existing foreground monitor **as a user
+launchd background job**. This keeps all runner processes independent from the
+menu bar process and Terminal window. Click the icon → **Avvia runner in background**.
+
+**Safely switch from an active Terminal monitor:** Wait until all 4 runners are
+idle and no GitHub job is running, then press Ctrl+C in the existing terminal
+to terminate its runner session. When the cards are no longer live, click
+**Avvia runner in background**. Never just close a Terminal with running jobs:
+the old monitor owns those processes and closing it can interrupt them.
+
+The app registers an owner-owned LaunchAgent at:
+
+~~~
+~/Library/LaunchAgents/runnerpulse-background-runners.plist
+~~~
+
+The managed process runs the existing
+\`~/Projects/local-runner-infra/scripts/interactive_runners.py --no-color\`
+using Python 3 and the CLI auth already present on your Mac. It invokes the
+existing preflight **without --force**: it checks GitHub runner identities,
+refuses busy or duplicated processes, and can safely hand over inactive
+launchd runner services only after those checks. If GitHub reports a stale
+online heartbeat, wait for the runner to become offline and retry later.
+RunnerPulse never automatically kills orphan runner processes.
+
+Log files for the background service:
+
+~~~
+~/Library/Logs/RunnerPulse/background-runners.log
+~/Library/Logs/RunnerPulse/background-runners.err.log
+~~~
+
+The menu offers a **Log avvio** shortcut for errors. RunnerPulse does not
+automatically start the workers on login (RunAtLoad=false) or restart them
+after an unexpected exit (KeepAlive=false). The launchd job remains registered
+for later clicks. RunnerPulse itself may be closed without stopping the
+background session.
+
+**Stopping runner processes is intentionally not offered in the menu:** a
+forced stop may interrupt CI jobs, so first use GitHub job status and the
+existing documented runner management procedure when you need to stop them.
+Do not invoke \`runners --force\` while a background session is active.
+
+If your repositories are in nonstandard local locations, the current MVP
+expects \`~/Projects/local-runner-infra\` and \`~/actions-runners/runner-1..4\`.
+Automatic launching is disabled with a clear error if either is missing.
+
 ## Local-first dashboard (preferred on your runner Mac)
 
 RunnerPulse now defaults to a **read-only local dashboard**, not the GitHub
