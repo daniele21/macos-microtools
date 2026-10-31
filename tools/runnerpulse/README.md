@@ -45,6 +45,30 @@ not raw logs, job output, credentials or repository contents. Files are
 written atomically with owner-only permissions. RunnerPulse never creates a
 second runner process.
 
+## Understanding job provenance
+
+The local dashboard now separates **source project** (the code under test)
+from **workflow owner** (the repository where the Actions job exists).
+For a verified job, it displays the source repository, the 8-character
+source SHA, its complete workflow name, the execution repository, and
+an action to open the authoritative GitHub Actions run. The trigger is
+shown as **Dal progetto** for `repository_dispatch`, **Richiesta centrale**
+for a versioned central request, or **Workflow diretto** for native
+project workflows.
+
+The source commit link points to the verified source SHA, **not** to the
+central infrastructure commit. If the monitor cannot verify attribution
+(e.g., missing GitHub CLI permissions or ambiguous request), the card says
+**Origine non verificata**. A GitHub run link can still be displayed.
+Recent activity includes the same execution ownership and a link to logs.
+
+The Python-side monitor in `local-runner-infra` publishes optional fields in
+the existing `schema_version: 1` JSON; older v1 snapshots continue decoding.
+No GitHub token is required inside RunnerPulse for this local view. To deploy:
+update the Python monitor and restart foreground `runners` **after current
+jobs have finished**, then update this repository and run
+`make test-runnerpulse && make refresh-runnerpulse`.
+
 ## Install
 
 Requires macOS 13+ and Apple Command Line Tools:
