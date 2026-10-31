@@ -2,6 +2,46 @@
 
 A zero-dependency, Swift-native menu bar tool showing **which self-hosted runner is busy, which repository and job is using it, the current step, queues, runtime and recent failures**. Built with Apple AppKit, SwiftUI, Foundation and Security; no background agent or telemetry daemon.
 
+## Always-on passive monitoring, no terminal (recommended)
+
+When the four existing GitHub Actions runner services are already managed by
+launchd, **do not start a second foreground runner session**. Install this
+independent read-only monitor instead:
+
+~~~bash
+cd "$HOME/Projects/local-runner-infra"
+git pull --ff-only
+cd "$HOME/Projects/macos-microtools"
+git pull --ff-only
+make install-runnerpulse-observer
+~~~
+
+The LaunchAgent com.daniele.runnerpulse.observer is installed in
+~/Library/LaunchAgents/ and has RunAtLoad=true, KeepAlive=true, and a
+20-second restart throttle. It starts at **macOS user login** (Aqua
+session), not at boot before user login.
+
+The observer uses the existing process list and only bounded metadata from
+runner-N/_diag/Worker_*.log. It writes the usual owner-only runner-N.json
+snapshots every second. It **never starts, stops, or force-kills CI
+runners** and requires no GitHub token. When an interactive runners
+session is active, it yields status-file ownership to the existing monitor
+and resumes afterward.
+
+Observer logs:
+- ~/Library/Logs/RunnerPulse/observer.log
+- ~/Library/Logs/RunnerPulse/observer.err.log
+
+To disable observer auto-start without touching GitHub runner services:
+
+~~~bash
+make uninstall-runnerpulse-observer
+~~~
+
+The separate Avvia runner in background button remains for cases where
+the actual runner services are stopped. For healthy existing launchd
+runner services, passive observation is preferred.
+
 ## Start runners directly from the menu bar (no Terminal window)
 
 RunnerPulse can now launch the same existing foreground monitor **as a user
