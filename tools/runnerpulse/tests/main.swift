@@ -70,6 +70,53 @@ check(local.isFresh(now: Date(timeIntervalSince1970: 1003.0)), "local live heart
 check(!local.isFresh(now: Date(timeIntervalSince1970: 1010.0)), "stale is not online")
 check(local.recent_events.count == 1, "local event decode")
 
+check(local.job?.trigger_mode == nil, "older v1 snapshots remain compatible")
+check(local.job?.originTitle == "daniele21/source-repo", "legacy origin fallback")
+
+let centralJSON = Data(#"""
+{
+  "schema_version": 1, "runner_id": 3, "session_id": "session-y", "pid": 123,
+  "updated_at": 1000, "status": "running",
+  "job": {
+    "name": "test-on-mac", "repository": "daniele21/skill-engine",
+    "sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "workflow": "Central Local CI", "event_name": "push",
+    "execution_repository": "daniele21/local-runner-infra",
+    "execution_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "trigger_mode": "central_request", "attribution_status": "verified",
+    "run_url": "https://github.com/daniele21/local-runner-infra/actions/runs/38870605399",
+    "started_at": 950, "current_step": "Execute source-owned Mac validation",
+    "steps": []
+  }, "recent_events": []
+}
+"""#.utf8)
+let central = try decoder.decode(RunnerPulseLocalSnapshot.self, from: centralJSON)
+check(central.job?.originTitle == "daniele21/skill-engine", "display true source repo")
+check(central.job?.triggerTitle == "Richiesta centrale", "central request label")
+check(central.job?.execution_repository == "daniele21/local-runner-infra", "separate workflow owner")
+check(central.job?.sourceCommitURL ==
+      "https://github.com/daniele21/skill-engine/commit/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "source link points to source SHA, not central SHA")
+let unresolvedJSON = Data(#"""
+{
+  "schema_version": 1, "runner_id": 3, "session_id": "session-z", "pid": 124,
+  "updated_at": 1000, "status": "running",
+  "job": {
+    "name": "test-on-mac", "repository": null, "sha": null,
+    "workflow": "Central Local CI", "event_name": "push",
+    "execution_repository": "daniele21/local-runner-infra",
+    "execution_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "trigger_mode": "central_request", "attribution_status": "unresolved",
+    "run_url": "https://github.com/daniele21/local-runner-infra/actions/runs/38870605399",
+    "started_at": 950, "current_step": null, "steps": []
+  }, "recent_events": []
+}
+"""#.utf8)
+let unresolved = try decoder.decode(RunnerPulseLocalSnapshot.self, from: unresolvedJSON)
+check(unresolved.job?.originTitle == "Origine non verificata", "do not misattribute unresolved requests")
+check(unresolved.job?.sourceCommitURL == nil, "no false link for central event commit")
+
+
 let dir = FileManager.default.temporaryDirectory
     .appendingPathComponent("runnerpulse-test-\(UUID().uuidString)")
 try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
