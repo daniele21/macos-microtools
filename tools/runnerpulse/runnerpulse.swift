@@ -450,6 +450,140 @@ enum RunnerPulseKeychain {
     }
 }
 
+// MARK: - Optional launchd-managed local session
+// Never starts a runner when any live foreground telemetry exists, never uses
+// --force, and never stops/kills other runner processes or launchd services.
+// The existing Python preflight also refuses busy/duplicate runners.
+enum RunnerPulseBackgroundControl {
+    static let label = "com.daniele.runnerpulse.background-runners"
+    static let serviceName = "runnerpulse-background-runners.plist"
+
+    static func scriptURL(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> URL {
+        home.appendingPathComponent("Projects/local-runner-infra/scripts/interactive_runners.py")
+    }
+
+    static func plistURL(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> URL {
+        home.appendingPathComponent("Library/LaunchAgents/\(serviceName)")
+    }
+
+    private static func runLaunchctl(_ arguments: [String]) throws -> (Int32, String) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+        process.arguments = arguments
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+        try process.run()
+        let output = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        return (process.terminationStatus, String(data: output, encoding: .utf8) ?? "")
+    }
+
+    private static func pythonExecutable() -> String? {
+        ["/opt/homebrew/bin/python3", "/usr/local/bin/python3", "/usr/bin/python3"]
+            .first(where: { FileManager.default.isExecutableFile(atPath: $0) })
+    }
+
+    private static func alreadyRunning(_ domain: String) -> Bool {
+        guard let check = try? runLaunchctl(["print", "\(domain)/\(label)"]),
+              check.0 == 0 else { return false }
+        // launchctl reports "pid = ..." for an active service instance.
+        return check.1.split(separator: "\n").contains { line in
+            line.trimmingCharacters(in: .whitespaces).hasPrefix("pid = ")
+        }
+    }
+
+    static func start() throws -> String {
+        let fm = FileManager.default
+        let home = fm.homeDirectoryForCurrentUser
+        let script = scriptURL(home: home)
+        guard fm.fileExists(atPath: script.path),
+              fm.fileExists(atPath: script.deletingLastPathComponent()
+                .appendingPathComponent("runner_monitor/status.py").path) else {
+            throw NSError(domain: "RunnerPulse", code: 1,
+                          userInfo: [NSLocalizedDescriptionKey:
+                            "Monitor aggiornato non trovato in ~/Projects/local-runner-infra. Aggiorna quel repository."])
+        }
+        guard let python = pythonExecutable() else {
+            throw NSError(domain: "RunnerPulse", code: 2,
+                          userInfo: [NSLocalizedDescriptionKey: "Python 3 non trovato."])
+        }
+        for id in 1...4 {
+            let runner = home.appendingPathComponent("actions-runners/runner-\(id)/run.sh")
+            guard fm.fileExists(atPath: runner.path) else {
+                throw NSError(domain: "RunnerPulse", code: 3,
+                              userInfo: [NSLocalizedDescriptionKey:
+                                "runner-\(id) non configurato in ~/actions-runners."])
+            }
+        }
+        let domain = "gui/\(getuid())"
+        if alreadyRunning(domain) {
+            return "Sessione in background già attiva."
+        }
+        if RunnerPulseLocalReader.load().contains(where: { $0.isFresh() &&
+            ["starting", "running", "idle"].contains($0.status) }) {
+            throw NSError(domain: "RunnerPulse", code: 4,
+                          userInfo: [NSLocalizedDescriptionKey:
+                            "I runner risultano già gestiti da una sessione attiva. Non verrà creata una seconda istanza."])
+        }
+        let launchAgents = home.appendingPathComponent("Library/LaunchAgents", isDirectory: true)
+        let logs = home.appendingPathComponent("Library/Logs/RunnerPulse", isDirectory: true)
+        try fm.createDirectory(at: launchAgents, withIntermediateDirectories: true)
+        try fm.createDirectory(at: logs, withIntermediateDirectories: true)
+        let destination = plistURL(home: home)
+        let contents: [String: Any] = [
+            "Label": label,
+            "ProgramArguments": [python, script.path, "--no-color"],
+            "WorkingDirectory": script.deletingLastPathComponent().deletingLastPathComponent().path,
+            "EnvironmentVariables": [
+                "HOME": home.path,
+                "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+                "PYTHONUNBUFFERED": "1"
+            ],
+            "RunAtLoad": false,
+            "KeepAlive": false,
+            "ProcessType": "Background",
+            "LimitLoadToSessionType": "Aqua",
+            "StandardOutPath": logs.appendingPathComponent("background-runners.log").path,
+            "StandardErrorPath": logs.appendingPathComponent("background-runners.err.log").path
+        ]
+        let data = try PropertyListSerialization.data(fromPropertyList: contents,
+                                                      format: .xml, options: 0)
+        try data.write(to: destination, options: .atomic)
+        try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: destination.path)
+
+        let registered = (try? runLaunchctl(["print", "\(domain)/\(label)"]).0) == 0
+        if !registered {
+            let result = try runLaunchctl(["bootstrap", domain, destination.path])
+            guard result.0 == 0 else {
+                throw NSError(domain: "RunnerPulse", code: 5,
+                              userInfo: [NSLocalizedDescriptionKey:
+                                "launchd bootstrap: \(result.1.trimmingCharacters(in: .whitespacesAndNewlines))"])
+            }
+        }
+        // One last no-duplicate check after service registration. Never use -k.
+        if alreadyRunning(domain) { return "Sessione in background già attiva." }
+        if RunnerPulseLocalReader.load().contains(where: { $0.isFresh() &&
+            ["starting", "running", "idle"].contains($0.status) }) {
+            throw NSError(domain: "RunnerPulse", code: 6,
+                          userInfo: [NSLocalizedDescriptionKey:
+                            "Un'altra sessione runner è partita nel frattempo. Avvio annullato."])
+        }
+        let result = try runLaunchctl(["kickstart", "\(domain)/\(label)"])
+        guard result.0 == 0 else {
+            throw NSError(domain: "RunnerPulse", code: 7,
+                          userInfo: [NSLocalizedDescriptionKey:
+                            "launchd kickstart: \(result.1.trimmingCharacters(in: .whitespacesAndNewlines))"])
+        }
+        return "Avvio richiesto. La connessione e i controlli preflight possono richiedere qualche secondo."
+    }
+
+    static func logURL() -> URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Logs/RunnerPulse/background-runners.err.log")
+    }
+}
+
 final class RunnerPulseState: ObservableObject {
     @Published var snapshot = RunnerPulseSnapshot()
     @Published var refreshing = false
@@ -462,6 +596,8 @@ final class RunnerPulseState: ObservableObject {
     // that is only bundled with full Xcode. Never persist this draft.
     @Published var pendingToken = ""
     @Published var localSnapshots: [RunnerPulseLocalSnapshot] = []
+    @Published var launchingRunners = false
+    @Published var runnerControlMessage: String?
     private var localTimer: Timer?
     private var token: String?
     private var lastRequest: Date?
@@ -520,6 +656,35 @@ final class RunnerPulseState: ObservableObject {
     }
 
     var hasLocalTelemetry: Bool { !localSnapshots.isEmpty }
+    var hasLiveLocalSession: Bool {
+        localSnapshots.contains(where: { $0.isFresh() && ["starting", "running", "idle"].contains($0.status) })
+    }
+
+    func launchRunnersInBackground() {
+        guard !launchingRunners, !hasLiveLocalSession else { return }
+        launchingRunners = true
+        runnerControlMessage = nil
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let message: String
+            do {
+                message = try RunnerPulseBackgroundControl.start()
+            } catch {
+                message = "Avvio non riuscito: \(error.localizedDescription)"
+            }
+            DispatchQueue.main.async {
+                self?.launchingRunners = false
+                self?.runnerControlMessage = message
+                self?.pollLocal()
+            }
+        }
+    }
+
+    func openBackgroundLog() {
+        let url = RunnerPulseBackgroundControl.logURL()
+        if FileManager.default.fileExists(atPath: url.path) {
+            NSWorkspace.shared.open(url)
+        }
+    }
 
     func pollLocal() {
         localSnapshots = RunnerPulseLocalReader.load()
