@@ -98,8 +98,16 @@ private final class SoftwareDimmer {
     }
 
     func set(percent: Int, screen: NSScreen?) {
+        guard let screen, percent < 100 else {
+            clear()
+            return
+        }
+        let opacity = CGFloat(100 - percent) / 100.0 * 0.85
+        if let window, window.screen === screen {
+            window.alphaValue = opacity
+            return
+        }
         clear()
-        guard let screen, percent < 100 else { return }
         let panel = NSWindow(
             contentRect: screen.frame,
             styleMask: .borderless,
@@ -110,7 +118,7 @@ private final class SoftwareDimmer {
         panel.isOpaque = false
         panel.hasShadow = false
         panel.backgroundColor = .black
-        panel.alphaValue = CGFloat(100 - percent) / 100.0 * 0.85
+        panel.alphaValue = opacity
         panel.ignoresMouseEvents = true
         panel.level = .floating
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
