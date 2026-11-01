@@ -118,7 +118,7 @@ uninstall-runnerpulse-observer:
 
 
 # DisplayPulse: one-file native AppKit brightness control, optional m1ddc for hardware DDC/CI.
-.PHONY: build-displaypulse install-displaypulse refresh-displaypulse test-displaypulse uninstall-displaypulse
+.PHONY: build-displaypulse install-displaypulse refresh-displaypulse test-displaypulse uninstall-displaypulse enable-displaypulse-login disable-displaypulse-login status-displaypulse-login
 
 bin/DisplayPulse.app/Contents/MacOS/DisplayPulse: tools/displaypulse/displaypulse.swift tools/displaypulse/Info.plist | bin
 	mkdir -p bin/DisplayPulse.app/Contents/MacOS
@@ -145,8 +145,28 @@ test-displaypulse: build-displaypulse
 	@bin/displaypulse-probe-tests --self-test
 	@bin/DisplayPulse.app/Contents/MacOS/DisplayPulse --help | grep -q "brightness controller"
 	@plutil -lint bin/DisplayPulse.app/Contents/Info.plist
+	@/bin/bash -n tools/displaypulse/login-item.sh
+	@temp=$(mktemp); trap 'rm -f "$temp"' EXIT; \
+		/bin/bash tools/displaypulse/login-item.sh render "$temp"; \
+		test "$(/usr/libexec/PlistBuddy -c 'Print :Label' "$temp")" = "com.daniele.displaypulse"; \
+		test "$(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments:0' "$temp")" = "/usr/bin/open"; \
+		test "$(/usr/libexec/PlistBuddy -c 'Print :RunAtLoad' "$temp")" = "true"; \
+		test "$(/usr/libexec/PlistBuddy -c 'Print :LimitLoadToSessionType' "$temp")" = "Aqua"; \
+		echo "DisplayPulse login item plist validation passed."
+
+# Login-only launch: no sudo, no persistent shell or background polling.
+# Explicit opt-in: installing the app alone does not modify login settings.
+enable-displaypulse-login: install-displaypulse
+	@/bin/bash tools/displaypulse/login-item.sh enable
+
+disable-displaypulse-login:
+	@/bin/bash tools/displaypulse/login-item.sh disable
+
+status-displaypulse-login:
+	@/bin/bash tools/displaypulse/login-item.sh status
 
 uninstall-displaypulse:
+	@/bin/bash tools/displaypulse/login-item.sh disable
 	-pkill -x DisplayPulse 2>/dev/null
 	rm -rf $(HOME)/.local/opt/DisplayPulse.app
 	@echo "✓ DisplayPulse uninstalled"
