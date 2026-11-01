@@ -122,6 +122,8 @@ private final class SoftwareDimmer {
 private final class BrightnessController: NSViewController {
     private var mode: Int = 1 // 0: hardware, 1: software
     private var tested = false
+    private var verifiedSelector: String?
+    private let ddcQueue = DispatchQueue(label: "displaypulse.ddc", qos: .utility)
     private var maxDDCValue = 100
     private var pendingWrite: DispatchWorkItem?
     private var screens: [NSScreen] = []
@@ -137,7 +139,7 @@ private final class BrightnessController: NSViewController {
     private let targetField = NSTextField(string: "1")
     private let screenPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let probeButton = NSButton(title: "Verifica DDC/CI", target: nil, action: nil)
-    private let listButton = NSButton(title: "Elenca monitor", target: nil, action: nil)
+    private let listButton = NSButton(title: "Copia elenco", target: nil, action: nil)
 
     override func loadView() {
         let root = NSView(frame: NSRect(x: 0, y: 0, width: 346, height: 300))
@@ -238,8 +240,11 @@ private final class BrightnessController: NSViewController {
             $0.localizedName.localizedCaseInsensitiveContains("P156")
         }) {
             screenPopup.selectItem(at: idx)
-        } else if !screens.isEmpty {
+        } else if previous == nil && !screens.isEmpty {
             screenPopup.selectItem(at: 0)
+        } else {
+            // Do not silently move the dimmer to a different screen after unplugging.
+            screenPopup.selectItem(nil)
         }
     }
 
@@ -253,6 +258,7 @@ private final class BrightnessController: NSViewController {
     }
 
     @objc private func targetChanged() {
+        verifiedSelector = nil
         tested = false
         modeControl.setEnabled(false, forSegment: 0)
         modeControl.selectedSegment = 1
@@ -265,25 +271,28 @@ private final class BrightnessController: NSViewController {
 
     @objc private func listClicked() {
         statusLabel.stringValue = "Ricerca monitor in corso…"
-        DispatchQueue.global(qos: .utility).async {
-            let message: String
+        ddcQueue.async {
             do {
                 let text = try DDC.list()
-                message = text.isEmpty ? "Nessun monitor identificato." : String(text.prefix(300))
+                DispatchQueue.main.async {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(text, forType: .string)
+                    self.statusLabel.stringValue = "Elenco monitor copiato negli appunti."
+                }
             } catch {
-                message = error.localizedDescription
+                DispatchQueue.main.async { self.statusLabel.stringValue = error.localizedDescription }
             }
-            DispatchQueue.main.async { self.statusLabel.stringValue = message }
         }
     }
 
     @objc private func probeClicked() {
         let selector = targetField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         tested = false
+        verifiedSelector = nil
         modeControl.setEnabled(false, forSegment: 0)
         probeButton.isEnabled = false
         statusLabel.stringValue = "Lettura hardware in corso, nessuna modifica."
-        DispatchQueue.global(qos: .utility).async {
+        ddcQueue.async {
             let result = Result { try DDC.probe(selector) }
             DispatchQueue.main.async {
                 self.probeButton.isEnabled = true
@@ -291,6 +300,7 @@ private final class BrightnessController: NSViewController {
                 switch result {
                 case .success(let response):
                     self.tested = true
+                    self.verifiedSelector = selector
                     self.maxDDCValue = response.maximum
                     self.modeControl.setEnabled(true, forSegment: 0)
                     self.statusLabel.stringValue = "DDC letto: \(response.current)/\(response.maximum). Prova la modifica per confermare."
@@ -354,9 +364,18 @@ private final class BrightnessController: NSViewController {
     private func sendHardwareValue() {
         guard tested, mode == 0 else { return }
         let selector = targetField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard selector == verifiedSelector else {
+            tested = false
+            verifiedSelector = nil
+            mode = 1
+            modeControl.selectedSegment = 1
+            modeControl.setEnabled(false, forSegment: 0)
+            statusLabel.stringValue = "Monitor modificato: ripetere la verifica DDC."
+            return
+        }
         let percent = slider.integerValue
         let value = max(0, min(maxDDCValue, Int((Double(percent) / 100 * Double(maxDDCValue)).rounded())))
-        DispatchQueue.global(qos: .utility).async {
+        ddcQueue.async {
             let result = Result { try DDC.write(selector, value: value) }
             DispatchQueue.main.async {
                 guard self.mode == 0 && selector == self.targetField.stringValue else { return }
