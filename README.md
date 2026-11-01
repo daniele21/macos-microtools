@@ -98,4 +98,4 @@ MIT License © 2026 Daniele Moltisanti
 
 ## DisplayPulse
 
-DisplayPulse supports optional m1ddc for real hardware brightness and a built-in software dimmer fallback. The Atlantis A05-P156WP's DDC/CI support is **not verified** yet. Install only this app with `make install-displaypulse`, open `~/.local/opt/DisplayPulse.app` and follow the [read-only probe instructions](tools/displaypulse/README.md).
+DisplayPulse supports optional m1ddc for real hardware brightness and a built-in software dimmer fallback. The Atlantis A05-P156WP's DDC/CI support is **not verified** yet. Install only this app with `make install-displaypulse`, open `~/.local/opt/DisplayPulse.app` and follow the [read-only probe instructions](tools/displaypulse/README.md). To start the menu-bar app automatically on every macOS login, run `make enable-displaypulse-login` once; inspect with `make status-displaypulse-login` or remove with `make disable-displaypulse-login`. This creates only a per-user LaunchAgent, without sudo or a persistent terminal.
