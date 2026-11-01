@@ -151,12 +151,12 @@ test-displaypulse: build-displaypulse
 	@# iconutil successfully built the container; test the resource exists and plist points to it.
 	@test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' bin/DisplayPulse.app/Contents/Info.plist)" = "DisplayPulse.icns"
 	@/bin/bash -n tools/displaypulse/login-item.sh
-	@temp=$(mktemp); trap 'rm -f "$temp"' EXIT; \
-		/bin/bash tools/displaypulse/login-item.sh render "$temp"; \
-		test "$(/usr/libexec/PlistBuddy -c 'Print :Label' "$temp")" = "com.daniele.displaypulse"; \
-		test "$(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments:0' "$temp")" = "/usr/bin/open"; \
-		test "$(/usr/libexec/PlistBuddy -c 'Print :RunAtLoad' "$temp")" = "true"; \
-		test "$(/usr/libexec/PlistBuddy -c 'Print :LimitLoadToSessionType' "$temp")" = "Aqua"; \
+	@temp=$$(mktemp); trap 'rm -f "$$temp"' EXIT; \
+		/bin/bash tools/displaypulse/login-item.sh render "$$temp"; \
+		test "$$(/usr/libexec/PlistBuddy -c 'Print :Label' "$$temp")" = "com.daniele.displaypulse"; \
+		test "$$(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments:0' "$$temp")" = "/usr/bin/open"; \
+		test "$$(/usr/libexec/PlistBuddy -c 'Print :RunAtLoad' "$$temp")" = "true"; \
+		test "$$(/usr/libexec/PlistBuddy -c 'Print :LimitLoadToSessionType' "$$temp")" = "Aqua"; \
 		echo "DisplayPulse login item plist validation passed."
 
 # Login-only launch: no sudo, no persistent shell or background polling.
