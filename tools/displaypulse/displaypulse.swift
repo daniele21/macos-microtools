@@ -21,7 +21,7 @@ private enum DDC {
             case .missingTool: return "m1ddc non trovato: brew install m1ddc"
             case .invalidSelector: return "Identificatore monitor non valido."
             case .command(let message): return "DDC non disponibile: \(message)"
-            case .invalidReading: return "Il monitor non ha restituito una luminosità valida."
+            case .invalidReading: return "Risposta DDC non attendibile (valore massimo assente, zero o incoerente)."
             }
         }
     }
@@ -72,15 +72,24 @@ private enum DDC {
         try run(["display", "list", "detailed"])
     }
 
-    static func probe(_ selector: String) throws -> Probe {
-        guard validSelector(selector) else { throw Failure.invalidSelector }
-        let raw = try run(["display", selector, "get", "luminance"])
-        guard let current = Int(raw), current >= 0, current <= 65535 else {
+    // m1ddc can decode a zero-filled DDC packet as the number zero.
+    // Therefore a successful exit code or a current reading of 0 is NOT enough.
+    // Never manufacture a default maximum; it would enable unsafe DDC writes.
+    static func parseProbe(currentText: String, maximumText: String) throws -> Probe {
+        guard let current = Int(currentText),
+              let maximum = Int(maximumText),
+              maximum > 0, maximum <= 65535,
+              current >= 0, current <= maximum else {
             throw Failure.invalidReading
         }
-        let rawMax = try? run(["display", selector, "max", "luminance"])
-        let maximum = max(1, Int(rawMax ?? "") ?? 100)
         return Probe(current: current, maximum: maximum)
+    }
+
+    static func probe(_ selector: String) throws -> Probe {
+        guard validSelector(selector) else { throw Failure.invalidSelector }
+        let current = try run(["display", selector, "get", "luminance"])
+        let maximum = try run(["display", selector, "max", "luminance"])
+        return try parseProbe(currentText: current, maximumText: maximum)
     }
 
     static func write(_ selector: String, value: Int) throws {
@@ -439,6 +448,22 @@ private final class DisplayPulseApp: NSObject, NSApplicationDelegate {
 @main
 private struct DisplayPulseMain {
     static func main() {
+        #if DISPLAYPULSE_TEST
+        if CommandLine.arguments.contains("--self-test") {
+            func succeeds(_ cur: String, _ max: String) -> Bool {
+                (try? DDC.parseProbe(currentText: cur, maximumText: max)) != nil
+            }
+            precondition(!succeeds("0", "0"), "zero-filled replies must not enable hardware")
+            precondition(!succeeds("40", "0"), "zero maximum is invalid")
+            precondition(!succeeds("40", ""), "missing maximum is invalid")
+            precondition(!succeeds("101", "100"), "current must not exceed maximum")
+            precondition(!succeeds("abc", "100"), "nonnumeric reply is invalid")
+            precondition(succeeds("50", "100"), "normal reading must be valid")
+            precondition(succeeds("0", "100"), "zero current can be valid with positive maximum")
+            print("DisplayPulse DDC probe parsing tests passed.")
+            return
+        }
+        #endif
         if CommandLine.arguments.contains("--help") {
             print("DisplayPulse: menu-bar brightness controller\nUsage: DisplayPulse [--probe DISPLAY]\n--probe reads hardware brightness without changing it.")
             return
