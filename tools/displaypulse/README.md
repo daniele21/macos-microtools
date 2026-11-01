@@ -21,6 +21,35 @@ open "$HOME/.local/opt/DisplayPulse.app"
 
 DisplayPulse appears only in the menu bar. It has an explicit **Esci** button.
 
+## Avvio automatico al login (opzionale)
+
+Attiva **una sola volta**, dal tuo Mac con la sessione utente grafica aperta:
+
+~~~bash
+make enable-displaypulse-login
+~~~
+
+La procedura installa l'app in `~/.local/opt/DisplayPulse.app` e crea **solo** il LaunchAgent utente
+`~/Library/LaunchAgents/com.daniele.displaypulse.plist`. Quando esegui il login a macOS,
+`launchd` lancia `/usr/bin/open -g -a ~/.local/opt/DisplayPulse.app`.
+Non serve lasciare aperto il Terminale; non serve `sudo`. Il LaunchAgent esegue solo
+l'apertura dell'app, **non** un servizio che rimane attivo.
+
+~~~bash
+make status-displaypulse-login    # Stato del LaunchAgent
+make disable-displaypulse-login   # Disabilita l'avvio automatico senza chiudere l'app
+make refresh-displaypulse         # Ricompila e riapre la versione corrente
+~~~
+
+`make install-displaypulse` installa l'app ma **non** abilita automaticamente il login item.
+`make uninstall-displaypulse` disabilita anche l'avvio automatico. Durante il login
+l'app parte senza modificare la luminosità: l'eventuale oscuramento software non è
+ripristinato in automatico e non vengono inviati comandi DDC/CI.
+
+Se macOS blocca il LaunchAgent, controlla **Impostazioni di Sistema → Generali → Elementi login ed estensioni**.
+Per test automatizzati, `make test-displaypulse` esegue solo una verifica non invasiva
+della configurazione XML: non installa e non attiva agenti di login.
+
 ## Check if DDC/CI works
 
 ~~~bash
@@ -45,7 +74,7 @@ Do not use sudo, and do not guess an index when multiple monitors are connected.
 - Hardware writes are delayed by 350 ms during slider drags to avoid excessive DDC traffic.
 - The app shows a command acknowledgment, not verified hardware brightness. Confirm real visual change before assuming support.
 - The software dimming overlay is removed when you quit the app.
-- Menu-bar UX is intentionally limited: no launch agents, global key hooks, network access, or privileges.
+- Menu-bar UX is intentionally limited: optional login-only LaunchAgent, no global key hooks, no network access, no privileges.
 
 ~~~bash
 make test-displaypulse
