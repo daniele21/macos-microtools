@@ -120,10 +120,11 @@ uninstall-runnerpulse-observer:
 # DisplayPulse: one-file native AppKit brightness control, optional m1ddc for hardware DDC/CI.
 .PHONY: build-displaypulse install-displaypulse refresh-displaypulse test-displaypulse uninstall-displaypulse enable-displaypulse-login disable-displaypulse-login status-displaypulse-login
 
-bin/DisplayPulse.app/Contents/MacOS/DisplayPulse: tools/displaypulse/displaypulse.swift tools/displaypulse/Info.plist | bin
+bin/DisplayPulse.app/Contents/MacOS/DisplayPulse: tools/displaypulse/displaypulse.swift tools/displaypulse/Info.plist tools/displaypulse/build-icon.sh tools/displaypulse/assets/DisplayPulse.webp | bin
 	mkdir -p bin/DisplayPulse.app/Contents/MacOS
 	$(SWIFTC) -parse-as-library $(SWIFTFLAGS) -framework AppKit tools/displaypulse/displaypulse.swift -o bin/DisplayPulse.app/Contents/MacOS/DisplayPulse
 	cp tools/displaypulse/Info.plist bin/DisplayPulse.app/Contents/Info.plist
+	@/bin/bash tools/displaypulse/build-icon.sh
 	-codesign --force --sign - bin/DisplayPulse.app
 
 build-displaypulse: bin/DisplayPulse.app/Contents/MacOS/DisplayPulse
@@ -145,6 +146,10 @@ test-displaypulse: build-displaypulse
 	@bin/displaypulse-probe-tests --self-test
 	@bin/DisplayPulse.app/Contents/MacOS/DisplayPulse --help | grep -q "brightness controller"
 	@plutil -lint bin/DisplayPulse.app/Contents/Info.plist
+	@/bin/bash -n tools/displaypulse/build-icon.sh
+	@test -s bin/DisplayPulse.app/Contents/Resources/DisplayPulse.icns
+	@/usr/bin/sips -g format bin/DisplayPulse.app/Contents/Resources/DisplayPulse.icns | grep -qi "icns"
+	@test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' bin/DisplayPulse.app/Contents/Info.plist)" = "DisplayPulse.icns"
 	@/bin/bash -n tools/displaypulse/login-item.sh
 	@temp=$(mktemp); trap 'rm -f "$temp"' EXIT; \
 		/bin/bash tools/displaypulse/login-item.sh render "$temp"; \
