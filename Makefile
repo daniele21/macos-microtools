@@ -149,7 +149,7 @@ test-displaypulse: build-displaypulse
 	@/bin/bash -n tools/displaypulse/build-icon.sh
 	@test -s bin/DisplayPulse.app/Contents/Resources/DisplayPulse.icns
 	@# iconutil successfully built the container; test the resource exists and plist points to it.
-	@test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' bin/DisplayPulse.app/Contents/Info.plist)" = "DisplayPulse.icns"
+	@test "$$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' bin/DisplayPulse.app/Contents/Info.plist)" = "DisplayPulse.icns"
 	@/bin/bash -n tools/displaypulse/login-item.sh
 	@temp=$$(mktemp); trap 'rm -f "$$temp"' EXIT; \
 		/bin/bash tools/displaypulse/login-item.sh render "$$temp"; \
