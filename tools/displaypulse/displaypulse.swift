@@ -244,7 +244,7 @@ private final class BrightnessController: NSViewController {
             screenPopup.selectItem(at: 0)
         } else {
             // Do not silently move the dimmer to a different screen after unplugging.
-            screenPopup.selectItem(nil)
+            screenPopup.select(nil)
         }
     }
 
