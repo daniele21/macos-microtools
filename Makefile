@@ -141,6 +141,8 @@ refresh-displaypulse:
 	@open -n "$(HOME)/.local/opt/DisplayPulse.app"
 
 test-displaypulse: build-displaypulse
+	$(SWIFTC) -parse-as-library -D DISPLAYPULSE_TEST -framework AppKit tools/displaypulse/displaypulse.swift -o bin/displaypulse-probe-tests
+	@bin/displaypulse-probe-tests --self-test
 	@bin/DisplayPulse.app/Contents/MacOS/DisplayPulse --help | grep -q "brightness controller"
 	@plutil -lint bin/DisplayPulse.app/Contents/Info.plist
 
