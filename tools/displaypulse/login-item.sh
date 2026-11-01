@@ -46,7 +46,7 @@ EOF
   plutil -lint "$output"
 }
 
-case "\${1:-}" in
+case "${1:-}" in
   enable)
     if [[ ! -x "$APP/Contents/MacOS/DisplayPulse" ]]; then
       echo "DisplayPulse not installed at: $APP" >&2
