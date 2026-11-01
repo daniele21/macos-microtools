@@ -6,7 +6,7 @@ on:
       - 'Makefile'
       - '.github/workflows/displaypulse.yml'
   push:
-    branches: [feat/displaypulse-usbc-ddc]
+    branches: [main, feat/displaypulse-custom-appicon]
     paths:
       - 'tools/displaypulse/**'
       - 'Makefile'
@@ -25,3 +25,5 @@ jobs:
         run: |
           plutil -lint bin/DisplayPulse.app/Contents/Info.plist
           test -x bin/DisplayPulse.app/Contents/MacOS/DisplayPulse
+          test -s bin/DisplayPulse.app/Contents/Resources/DisplayPulse.icns
+          test "$( /usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' bin/DisplayPulse.app/Contents/Info.plist )" = "DisplayPulse.icns"
