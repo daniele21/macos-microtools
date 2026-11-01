@@ -21,6 +21,25 @@ open "$HOME/.local/opt/DisplayPulse.app"
 
 DisplayPulse appears only in the menu bar. It has an explicit **Esci** button.
 
+### App icon: monitor + sole
+
+The Finder app icon uses the selected monitor-and-sun artwork (dark blue rounded square,
+silver display, golden rising sun). A small WebP derivative is committed to the repo;
+the native build generates a standard Retina `DisplayPulse.icns` with
+`sips` + `iconutil` and embeds it under `Contents/Resources`.
+
+For the exact full-resolution artwork, download `DisplayPulse.icns` from the
+conversation and supply it once when installing:
+
+~~~bash
+DISPLAYPULSE_ICON_SOURCE="$HOME/Downloads/DisplayPulse.icns" make refresh-displaypulse
+~~~
+
+Or supply the original 1024px PNG instead. Without this override, the bundled
+derivative is used automatically. The macOS **menu-bar icon stays a monochrome
+SF Symbol**, so it adapts to light/dark appearance. No network fetch or
+login-settings change is involved.
+
 ## Avvio automatico al login (opzionale)
 
 Attiva **una sola volta**, dal tuo Mac con la sessione utente grafica aperta:
