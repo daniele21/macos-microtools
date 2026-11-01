@@ -18,7 +18,7 @@ bin/TerminalClip.app/Contents/MacOS/TerminalClip: tools/terminalclip/terminalcli
 	cp tools/terminalclip/Info.plist bin/TerminalClip.app/Contents/Info.plist
 	-codesign --force --sign - bin/TerminalClip.app
 
-build: bin/menumeter bin/TerminalClip.app/Contents/MacOS/TerminalClip bin/RunnerPulse.app/Contents/MacOS/RunnerPulse
+build: bin/menumeter bin/TerminalClip.app/Contents/MacOS/TerminalClip bin/RunnerPulse.app/Contents/MacOS/RunnerPulse bin/DisplayPulse.app/Contents/MacOS/DisplayPulse
 
 install-terminalclip: bin/TerminalClip.app/Contents/MacOS/TerminalClip
 	mkdir -p $(HOME)/.local/opt
@@ -49,6 +49,7 @@ install: build
 	@echo "✓ MenuMeter installed to $(PREFIX)/menumeter"
 	$(MAKE) install-terminalclip
 	$(MAKE) install-runnerpulse
+	$(MAKE) install-displaypulse
 
 uninstall-terminalclip:
 	-pkill -x TerminalClip 2>/dev/null
@@ -57,7 +58,7 @@ uninstall-terminalclip:
 	rm -rf $(HOME)/.local/opt/TerminalClip.app
 	@echo "✓ TerminalClip removed (Zsh configuration left untouched)"
 
-uninstall: uninstall-terminalclip uninstall-runnerpulse
+uninstall: uninstall-terminalclip uninstall-runnerpulse uninstall-displaypulse
 	pkill -x menumeter 2>/dev/null || true
 	rm -f $(PREFIX)/menumeter
 	rm -f $(PREFIX)/menumeter.swift
@@ -114,3 +115,58 @@ uninstall-runnerpulse-observer:
 	-launchctl bootout gui/$$(id -u)/com.daniele.runnerpulse.observer >/dev/null 2>&1
 	rm -f "$(HOME)/Library/LaunchAgents/com.daniele.runnerpulse.observer.plist"
 	@echo "✓ Passive observer removed; GitHub runner services untouched"
+
+
+# DisplayPulse: one-file native AppKit brightness control, optional m1ddc for hardware DDC/CI.
+.PHONY: build-displaypulse install-displaypulse refresh-displaypulse test-displaypulse uninstall-displaypulse enable-displaypulse-login disable-displaypulse-login status-displaypulse-login
+
+bin/DisplayPulse.app/Contents/MacOS/DisplayPulse: tools/displaypulse/displaypulse.swift tools/displaypulse/Info.plist | bin
+	mkdir -p bin/DisplayPulse.app/Contents/MacOS
+	$(SWIFTC) -parse-as-library $(SWIFTFLAGS) -framework AppKit tools/displaypulse/displaypulse.swift -o bin/DisplayPulse.app/Contents/MacOS/DisplayPulse
+	cp tools/displaypulse/Info.plist bin/DisplayPulse.app/Contents/Info.plist
+	-codesign --force --sign - bin/DisplayPulse.app
+
+build-displaypulse: bin/DisplayPulse.app/Contents/MacOS/DisplayPulse
+
+install-displaypulse: build-displaypulse
+	mkdir -p $(HOME)/.local/opt
+	rm -rf $(HOME)/.local/opt/DisplayPulse.app
+	ditto bin/DisplayPulse.app $(HOME)/.local/opt/DisplayPulse.app
+	@echo "✓ DisplayPulse installed to $(HOME)/.local/opt/DisplayPulse.app"
+
+refresh-displaypulse:
+	$(MAKE) -B build-displaypulse
+	@pkill -x DisplayPulse 2>/dev/null || true
+	$(MAKE) install-displaypulse
+	@open -n "$(HOME)/.local/opt/DisplayPulse.app"
+
+test-displaypulse: build-displaypulse
+	$(SWIFTC) -parse-as-library -D DISPLAYPULSE_TEST -framework AppKit tools/displaypulse/displaypulse.swift -o bin/displaypulse-probe-tests
+	@bin/displaypulse-probe-tests --self-test
+	@bin/DisplayPulse.app/Contents/MacOS/DisplayPulse --help | grep -q "brightness controller"
+	@plutil -lint bin/DisplayPulse.app/Contents/Info.plist
+	@/bin/bash -n tools/displaypulse/login-item.sh
+	@temp=$(mktemp); trap 'rm -f "$temp"' EXIT; \
+		/bin/bash tools/displaypulse/login-item.sh render "$temp"; \
+		test "$(/usr/libexec/PlistBuddy -c 'Print :Label' "$temp")" = "com.daniele.displaypulse"; \
+		test "$(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments:0' "$temp")" = "/usr/bin/open"; \
+		test "$(/usr/libexec/PlistBuddy -c 'Print :RunAtLoad' "$temp")" = "true"; \
+		test "$(/usr/libexec/PlistBuddy -c 'Print :LimitLoadToSessionType' "$temp")" = "Aqua"; \
+		echo "DisplayPulse login item plist validation passed."
+
+# Login-only launch: no sudo, no persistent shell or background polling.
+# Explicit opt-in: installing the app alone does not modify login settings.
+enable-displaypulse-login: install-displaypulse
+	@/bin/bash tools/displaypulse/login-item.sh enable
+
+disable-displaypulse-login:
+	@/bin/bash tools/displaypulse/login-item.sh disable
+
+status-displaypulse-login:
+	@/bin/bash tools/displaypulse/login-item.sh status
+
+uninstall-displaypulse:
+	@/bin/bash tools/displaypulse/login-item.sh disable
+	-pkill -x DisplayPulse 2>/dev/null
+	rm -rf $(HOME)/.local/opt/DisplayPulse.app
+	@echo "✓ DisplayPulse uninstalled"

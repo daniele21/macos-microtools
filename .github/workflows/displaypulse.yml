@@ -1,0 +1,27 @@
+name: DisplayPulse macOS validation
+on:
+  pull_request:
+    paths:
+      - 'tools/displaypulse/**'
+      - 'Makefile'
+      - '.github/workflows/displaypulse.yml'
+  push:
+    branches: [feat/displaypulse-usbc-ddc]
+    paths:
+      - 'tools/displaypulse/**'
+      - 'Makefile'
+      - '.github/workflows/displaypulse.yml'
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build native app and smoke test
+        run: make test-displaypulse
+      - name: Verify app bundle metadata
+        run: |
+          plutil -lint bin/DisplayPulse.app/Contents/Info.plist
+          test -x bin/DisplayPulse.app/Contents/MacOS/DisplayPulse

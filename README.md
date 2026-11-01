@@ -23,6 +23,7 @@ Most modern macOS utilities suffer from feature creep: multi-gigabyte Electron r
 | [**MenuMeter**](tools/menumeter/) | Minimalist CPU, RAM, Memory Pressure, Swap I/O, Thermal State, and Top Process dashboard in your menu bar. | Stable (v3) |
 | [**TerminalClip**](tools/terminalclip/) | Copy Terminal.app output with ⌘⌥C, optional Zsh command/exit code metadata and diagnostic reports. | MVP (UI 0.2; macOS interaction test pending) |
 | [**RunnerPulse**](tools/runnerpulse/) | Monitor GitHub Actions self-hosted runners, workflow jobs, current steps, queue and failures in the menu bar. | MVP (v0.1) |
+| [**DisplayPulse**](tools/displaypulse/) | Hardware DDC/CI brightness test and fallback per-screen software dimmer in the menu bar. | MVP (v0.1; Atlantis hardware probe pending) |
 
 *More tools (local port monitor, AI VRAM monitor, and sleep toggles) are planned.*
 
@@ -94,3 +95,7 @@ Suggestions and contributions are welcome! If you have ideas for lightweight, si
 
 MIT License © 2026 Daniele Moltisanti
 
+
+## DisplayPulse
+
+DisplayPulse supports optional m1ddc for real hardware brightness and a built-in software dimmer fallback. The Atlantis A05-P156WP's DDC/CI support is **not verified** yet. Install only this app with `make install-displaypulse`, open `~/.local/opt/DisplayPulse.app` and follow the [read-only probe instructions](tools/displaypulse/README.md). To start the menu-bar app automatically on every macOS login, run `make enable-displaypulse-login` once; inspect with `make status-displaypulse-login` or remove with `make disable-displaypulse-login`. This creates only a per-user LaunchAgent, without sudo or a persistent terminal.
