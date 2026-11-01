@@ -28,11 +28,14 @@ brew install m1ddc
 m1ddc display list detailed
 # Select the correct Atlantis number, e.g. 1:
 m1ddc display 1 get luminance
+m1ddc display 1 max luminance
 # Or use DisplayPulse's read-only CLI probe after building:
 "$HOME/.local/opt/DisplayPulse.app/Contents/MacOS/DisplayPulse" --probe 1
 ~~~
 
-If you get a readable value, choose that display number in the app and click **Verifica DDC/CI**. Only after the successful probe will the hardware slider become enabled. Move it slightly and confirm visually; some monitors acknowledge DDC commands but do not apply them. If hardware is unsupported, select **Software**, the correct macOS screen, and adjust the slider.
+A numeric **current value alone is not proof of DDC support**: the upstream m1ddc parser may interpret empty I2C response bytes as 0. First check **both** `get luminance` and `max luminance`. If the maximum is 0, missing, or incoherent, do not enable hardware mode. The app now rejects this case instead of inventing a default maximum.
+
+If you get a current value and a **positive, coherent maximum**, choose that display number in the app and click **Verifica DDC/CI**. Only after the successful probe will the hardware slider become enabled. Move it slightly and confirm visually; some monitors acknowledge DDC commands but do not apply them. If hardware is unsupported, select **Software**, the correct macOS screen, and adjust the slider.
 
 Do not use sudo, and do not guess an index when multiple monitors are connected. If USB-C is supplying both video and power, the Atlantis manual says brightness can reset to a low default on every USB-C reconnection.
 
