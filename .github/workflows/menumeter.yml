@@ -1,0 +1,30 @@
+name: MenuMeter macOS validation
+
+on:
+  pull_request:
+    paths:
+      - 'tools/menumeter/**'
+      - 'Makefile'
+      - '.github/workflows/menumeter.yml'
+  push:
+    branches: [main, feat/menumeter-memory-health]
+    paths:
+      - 'tools/menumeter/**'
+      - 'Makefile'
+      - '.github/workflows/menumeter.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Typecheck and run health analyzer tests
+        run: make test-menumeter
+      - name: Optimized production build
+        run: make build-menumeter
+      - name: Verify executable
+        run: test -x bin/menumeter
