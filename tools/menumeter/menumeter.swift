@@ -55,6 +55,42 @@ private func thermalStatus() -> (text: String, color: NSColor) {
     }
 }
 
+// MARK: - Memory health: sustained conditions, not swap capacity
+
+private struct MemoryHealthAssessment {
+    let status: String
+    let detail: String
+    let severity: Int  // 0 = normal, 1 = warning, 2 = critical
+}
+
+private enum MemoryHealthAnalyzer {
+    // Caller samples every 2s; windows are bounded to the latest 60s.
+    // Brief bursts remain visible in the graphs without causing an alert.
+    static func assess(pressureLevels: [Int], swapRates: [Double]) -> MemoryHealthAssessment {
+        let current = pressureLevels.last ?? 0
+        let redSeconds = pressureLevels.reversed().prefix(while: { $0 == 4 }).count * 2
+        let elevatedSeconds = pressureLevels.reversed().prefix(while: { $0 == 2 || $0 == 4 }).count * 2
+        let heavySwapSeconds = swapRates.reversed().prefix(while: { $0 >= 5.0 * mib }).count * 2
+
+        if redSeconds >= 6 {
+            return MemoryHealthAssessment(status: "Pressione critica persistente", detail: "Critica da almeno \(redSeconds)s. Riduci i carichi di memoria.", severity: 2)
+        }
+        if heavySwapSeconds >= 20 {
+            return MemoryHealthAssessment(status: "Swap I/O intensa", detail: "Letture/scritture elevate da almeno \(heavySwapSeconds)s.", severity: 1)
+        }
+        if elevatedSeconds >= 30 {
+            return MemoryHealthAssessment(status: "Pressione elevata persistente", detail: "Pressione elevata da almeno \(elevatedSeconds)s.", severity: 1)
+        }
+        if current == 4 || current == 2 {
+            return MemoryHealthAssessment(status: "Pressione da osservare", detail: "Picco recente: nessun allarme persistente.", severity: 0)
+        }
+        if current == 0 {
+            return MemoryHealthAssessment(status: "Pressione non disponibile", detail: "Impossibile leggere lo stato dal kernel.", severity: 0)
+        }
+        return MemoryHealthAssessment(status: "Memoria stabile", detail: "Nessun segnale persistente di difficoltà.", severity: 0)
+    }
+}
+
 // MARK: - ProgressTrackView (CALayer-based, zero constraint recreation)
 
 final class ProgressTrackView: NSView {
@@ -105,6 +141,37 @@ final class ProgressTrackView: NSView {
         let clamped = CGFloat(max(0.0, min(1.0, fraction.isNaN ? 0.0 : fraction)))
         fillLayer.frame = CGRect(x: 0, y: 0, width: bounds.width * clamped, height: bounds.height)
         fillLayer.isHidden = clamped <= 0.001
+    }
+}
+
+// MARK: - 60-second pressure strip (green/yellow/red, not a percentage)
+
+final class PressureStripView: NSView {
+    var levels: [Int] = [] {
+        didSet { needsDisplay = true }
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        let recent = Array(levels.suffix(30))
+        let count = 30
+        let spacing: CGFloat = 2
+        let itemWidth = max(1, (bounds.width - CGFloat(count - 1) * spacing) / CGFloat(count))
+        guard itemWidth > 0, bounds.height > 0 else { return }
+        let offset = count - recent.count
+
+        for (index, level) in recent.enumerated() {
+            let x = CGFloat(offset + index) * (itemWidth + spacing)
+            let color: NSColor
+            switch level {
+            case 4: color = .systemRed
+            case 2: color = .systemYellow
+            case 1: color = .systemGreen
+            default: color = .quaternaryLabelColor
+            }
+            color.setFill()
+            NSBezierPath(roundedRect: NSRect(x: x, y: 0, width: itemWidth, height: bounds.height), xRadius: 2, yRadius: 2).fill()
+        }
     }
 }
 
@@ -451,12 +518,19 @@ final class DashboardViewController: NSViewController {
 
     let pressureTitleLabel = NSTextField(labelWithString: "Pressione memoria")
     let pressureBadgeLabel = NSTextField(labelWithString: "● Normale")
+    let pressureHistoryLabel = NSTextField(labelWithString: "PRESSIONE · ULTIMI 60s")
+    let pressureHistoryView = PressureStripView()
+    let healthStatusLabel = NSTextField(labelWithString: "● Memoria stabile")
+    let healthDetailLabel = NSTextField(labelWithString: "Nessun allarme persistente")
 
     let activeBar = MetricBarView(title: "Attiva", valueText: "0 GiB", fraction: 0, color: .systemCyan)
     let wiredBar = MetricBarView(title: "Cablata", valueText: "0 GiB", fraction: 0, color: .systemIndigo)
     let compressedBar = MetricBarView(title: "Compressa", valueText: "0 GiB", fraction: 0, color: .systemPurple)
     let freeBar = MetricBarView(title: "Libera", valueText: "0 GiB", fraction: 0, color: .systemGray)
-    let swapUsedBar = MetricBarView(title: "Swap occupata", valueText: "0 GiB", fraction: 0, color: .systemOrange)
+    let swapUsageTitle = NSTextField(labelWithString: "Swap su disco")
+    let swapUsageValue = NSTextField(labelWithString: "Non disponibile")
+    let swapSparklineView = SparklineView()
+    let swapSparklineCaption = NSTextField(labelWithString: "I/O ultimi 60s")
 
     let swapActivityTitle = NSTextField(labelWithString: "Attività swap")
     let swapActivityValue = NSTextField(labelWithString: "Inattiva (0 KB/s)")
@@ -677,7 +751,7 @@ final class DashboardViewController: NSViewController {
         line1.distribution = .fill
 
         // Line 2: Version, Auto-start, Quit
-        let appTitle = NSTextField(labelWithString: "MenuMeter v3")
+        let appTitle = NSTextField(labelWithString: "MenuMeter v4")
         appTitle.font = .systemFont(ofSize: 11, weight: .medium)
         appTitle.textColor = .tertiaryLabelColor
         appTitle.isBezeled = false
