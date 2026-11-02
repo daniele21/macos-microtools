@@ -902,7 +902,10 @@ final class DashboardViewController: NSViewController {
         swapInRate: Double,
         swapOutRate: Double,
         pressure: (name: String, color: NSColor, level: Int)?,
-        history: [Double]
+        history: [Double],
+        pressureHistory: [Int],
+        swapHistory: [Double],
+        health: MemoryHealthAssessment
     ) {
         let totalGiB = total / gib
         let usedGiB = used / gib
@@ -937,6 +940,11 @@ final class DashboardViewController: NSViewController {
             ramSparklineView.strokeColor = .systemGreen
         }
 
+        pressureHistoryView.levels = pressureHistory
+        healthStatusLabel.stringValue = (health.severity == 2 ? "■ " : health.severity == 1 ? "▲ " : "● ") + health.status
+        healthStatusLabel.textColor = health.severity == 2 ? .systemRed : (health.severity == 1 ? .systemOrange : .secondaryLabelColor)
+        healthDetailLabel.stringValue = health.detail
+
         activeBar.update(valueText: formatBytes(active), fraction: total == 0 ? 0 : active / total)
         wiredBar.update(valueText: formatBytes(wired), fraction: total == 0 ? 0 : wired / total)
         compressedBar.update(valueText: formatBytes(compressed), fraction: total == 0 ? 0 : compressed / total)
@@ -944,35 +952,23 @@ final class DashboardViewController: NSViewController {
 
         let totalSwapRate = swapInRate + swapOutRate
 
-        // Swap occupata: arancione/rosso SOLO se c'è attività attiva o soglia elevata sostenuta
-        if let sUsed = swapUsed, let sTotal = swapTotal, sTotal > 0 {
-            let frac = min(sUsed / sTotal, 1.0)
-            let swapBarColor: NSColor
-            if totalSwapRate > (mib * 5) {
-                swapBarColor = .systemRed
-            } else if totalSwapRate > (kib * 250) {
-                swapBarColor = .systemOrange
-            } else {
-                swapBarColor = .systemGray
-            }
-
-            swapUsedBar.update(
-                valueText: String(format: "%.1f / %.1f GiB", sUsed / gib, sTotal / gib),
-                fraction: frac,
-                color: swapBarColor
-            )
+        if let sUsed = swapUsed {
+            swapUsageValue.stringValue = formatBytes(sUsed)
+            swapUsageValue.toolTip = swapTotal.map { "Swap allocata da macOS: \(formatBytes($0)). La quantità allocata può variare." }
         } else {
-            swapUsedBar.update(valueText: "0.0 GiB", fraction: 0, color: .systemGray)
+            swapUsageValue.stringValue = "Non disponibile"
+            swapUsageValue.toolTip = nil
         }
 
-        // Swap activity rate
-        if totalSwapRate < kib {
-            swapActivityValue.stringValue = "Inattiva (0 KB/s)"
-            swapActivityValue.textColor = .secondaryLabelColor
-        } else {
-            swapActivityValue.stringValue = "Attiva: in \(formatRate(swapInRate)) · out \(formatRate(swapOutRate))"
-            swapActivityValue.textColor = totalSwapRate > (mib * 5) ? .systemRed : .systemOrange
-        }
+        // Separate directions: swap-in reads pages from disk, swap-out writes them.
+        swapActivityValue.stringValue = "↓ \(formatRate(swapInRate)) · ↑ \(formatRate(swapOutRate))"
+        swapActivityValue.textColor = totalSwapRate > (mib * 5) ? .systemOrange : .secondaryLabelColor
+
+        // Normalize to the visible 60s peak, not a magic fixed maximum.
+        let actualPeak = swapHistory.max() ?? 0
+        let scale = max(mib, actualPeak)
+        swapSparklineView.values = swapHistory.map { min(100.0, max(0.0, 100.0 * $0 / scale)) }
+        swapSparklineCaption.stringValue = "SWAP I/O · 60s · picco \(formatRate(actualPeak))"
 
         // Thermal State
         let thermal = thermalStatus()
