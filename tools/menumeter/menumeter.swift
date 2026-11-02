@@ -21,11 +21,11 @@ private func formatBytes(_ bytes: Double) -> String {
 
 private func formatRate(_ bytesPerSec: Double) -> String {
     if bytesPerSec >= mib {
-        return String(format: "%.1f MB/s", bytesPerSec / mib)
+        return String(format: "%.1f MiB/s", bytesPerSec / mib)
     } else if bytesPerSec >= kib {
-        return String(format: "%.0f KB/s", bytesPerSec / kib)
+        return String(format: "%.0f KiB/s", bytesPerSec / kib)
     } else {
-        return "0 KB/s"
+        return "0 KiB/s"
     }
 }
 
@@ -532,8 +532,8 @@ final class DashboardViewController: NSViewController {
     let swapSparklineView = SparklineView()
     let swapSparklineCaption = NSTextField(labelWithString: "I/O ultimi 60s")
 
-    let swapActivityTitle = NSTextField(labelWithString: "Attività swap")
-    let swapActivityValue = NSTextField(labelWithString: "Inattiva (0 KB/s)")
+    let swapActivityTitle = NSTextField(labelWithString: "I/O")
+    let swapActivityValue = NSTextField(labelWithString: "↓ 0 KiB/s · ↑ 0 KiB/s")
 
     let ramTopProcesses = TopProcessesSectionView(title: "TOP PROCESSI RAM (RSS)")
 
@@ -1415,6 +1415,9 @@ let briefSwap = MemoryHealthAnalyzer.assess(pressureLevels: [1, 1], swapRates: [
 assert(briefSwap.severity == 0)
 let unknown = MemoryHealthAnalyzer.assess(pressureLevels: [0], swapRates: [0])
 assert(unknown.status == "Pressione non disponibile")
+// Occupied-but-idle swap must not trigger an alert: only actual I/O and pressure count.
+let recovered = MemoryHealthAnalyzer.assess(pressureLevels: [2, 2, 2, 1], swapRates: [6 * mib, 6 * mib, 6 * mib, 0])
+assert(recovered.severity == 0)
 print("MenuMeter memory-health tests passed")
 #else
 let app = NSApplication.shared
