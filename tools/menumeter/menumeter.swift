@@ -57,7 +57,7 @@ private func thermalStatus() -> (text: String, color: NSColor) {
 
 // MARK: - Memory health: sustained conditions, not swap capacity
 
-private struct MemoryHealthAssessment {
+struct MemoryHealthAssessment {
     let status: String
     let detail: String
     let severity: Int  // 0 = normal, 1 = warning, 2 = critical
@@ -1399,7 +1399,26 @@ final class MenuMeter: NSObject, NSPopoverDelegate {
     }
 }
 
+#if MENUMETER_TEST
+// Pure-logic smoke tests: no GUI, no permission prompts, no synthetic swap usage.
+let normal = MemoryHealthAnalyzer.assess(pressureLevels: Array(repeating: 1, count: 30), swapRates: Array(repeating: 0, count: 30))
+assert(normal.severity == 0 && normal.status == "Memoria stabile")
+let briefYellow = MemoryHealthAnalyzer.assess(pressureLevels: [1, 1, 2, 2], swapRates: [0, 0, 0, 0])
+assert(briefYellow.severity == 0)
+let yellow = MemoryHealthAnalyzer.assess(pressureLevels: Array(repeating: 2, count: 15), swapRates: Array(repeating: 0, count: 15))
+assert(yellow.severity == 1 && yellow.status.contains("persistente"))
+let red = MemoryHealthAnalyzer.assess(pressureLevels: [4, 4, 4], swapRates: [0, 0, 0])
+assert(red.severity == 2)
+let thrash = MemoryHealthAnalyzer.assess(pressureLevels: Array(repeating: 1, count: 10), swapRates: Array(repeating: 6 * mib, count: 10))
+assert(thrash.severity == 1 && thrash.status == "Swap I/O intensa")
+let briefSwap = MemoryHealthAnalyzer.assess(pressureLevels: [1, 1], swapRates: [6 * mib, 0])
+assert(briefSwap.severity == 0)
+let unknown = MemoryHealthAnalyzer.assess(pressureLevels: [0], swapRates: [0])
+assert(unknown.status == "Pressione non disponibile")
+print("MenuMeter memory-health tests passed")
+#else
 let app = NSApplication.shared
 app.setActivationPolicy(.accessory)
 let monitor = MenuMeter()
 app.run()
+#endif
