@@ -399,6 +399,7 @@ final class TopProcessRowView: NSView {
 
 final class TopProcessesSectionView: NSStackView {
     private let headerLabel = NSTextField(labelWithString: "")
+    private let statusLabel = NSTextField(labelWithString: "Caricamento processi…")
     private let rows: [TopProcessRowView] = [TopProcessRowView(), TopProcessRowView(), TopProcessRowView()]
 
     init(title: String) {
@@ -419,7 +420,16 @@ final class TopProcessesSectionView: NSStackView {
         headerLabel.leadingAnchor.constraint(equalTo: leadingAnchor).isActive = true
         headerLabel.trailingAnchor.constraint(equalTo: trailingAnchor).isActive = true
 
+        statusLabel.font = .systemFont(ofSize: 10, weight: .regular)
+        statusLabel.textColor = .secondaryLabelColor
+        statusLabel.lineBreakMode = .byTruncatingTail
+        statusLabel.toolTip = "I processi vengono letti quando apri il pannello."
+        addArrangedSubview(statusLabel)
+        statusLabel.leadingAnchor.constraint(equalTo: leadingAnchor).isActive = true
+        statusLabel.trailingAnchor.constraint(equalTo: trailingAnchor).isActive = true
+
         for row in rows {
+            row.isHidden = true
             addArrangedSubview(row)
             row.leadingAnchor.constraint(equalTo: leadingAnchor).isActive = true
             row.trailingAnchor.constraint(equalTo: trailingAnchor).isActive = true
@@ -428,7 +438,10 @@ final class TopProcessesSectionView: NSStackView {
 
     required init(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    func update(processes: [(pid: pid_t, name: String, valueText: String, fraction: Double, color: NSColor, tooltip: String)]) {
+    func update(processes: [(pid: pid_t, name: String, valueText: String, fraction: Double, color: NSColor, tooltip: String)], error: String? = nil) {
+        statusLabel.isHidden = !processes.isEmpty
+        statusLabel.stringValue = error ?? "Nessun processo disponibile"
+        statusLabel.toolTip = error
         for i in 0..<rows.count {
             if i < processes.count {
                 rows[i].isHidden = false
@@ -560,27 +573,49 @@ final class DashboardViewController: NSViewController {
         columns.distribution = .fillEqually
         columns.spacing = 20
 
+        // A fixed-height viewport keeps the footer visible on shorter displays.
+        // The NSStackView remains full-height inside the scrollable document.
+        let body = NSView()
+        body.translatesAutoresizingMaskIntoConstraints = false
+        body.addSubview(columns)
+        columns.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            columns.topAnchor.constraint(equalTo: body.topAnchor),
+            columns.leadingAnchor.constraint(equalTo: body.leadingAnchor),
+            columns.trailingAnchor.constraint(equalTo: body.trailingAnchor),
+            columns.bottomAnchor.constraint(equalTo: body.bottomAnchor)
+        ])
+        let bodyScrollView = NSScrollView()
+        bodyScrollView.drawsBackground = false
+        bodyScrollView.borderType = .noBorder
+        bodyScrollView.hasVerticalScroller = true
+        bodyScrollView.autohidesScrollers = true
+        bodyScrollView.verticalScrollElasticity = .allowed
+        bodyScrollView.documentView = body
+
         let separator = NSBox()
         separator.boxType = .separator
 
         let footerStack = buildFooter()
 
-        root.addSubview(columns)
+        root.addSubview(bodyScrollView)
         root.addSubview(separator)
         root.addSubview(footerStack)
 
-        columns.translatesAutoresizingMaskIntoConstraints = false
+        bodyScrollView.translatesAutoresizingMaskIntoConstraints = false
         separator.translatesAutoresizingMaskIntoConstraints = false
         footerStack.translatesAutoresizingMaskIntoConstraints = false
 
         NSLayoutConstraint.activate([
             root.widthAnchor.constraint(equalToConstant: 540),
 
-            columns.topAnchor.constraint(equalTo: root.topAnchor, constant: 14),
-            columns.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 14),
-            columns.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -14),
+            bodyScrollView.topAnchor.constraint(equalTo: root.topAnchor, constant: 14),
+            bodyScrollView.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 14),
+            bodyScrollView.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -14),
+            bodyScrollView.heightAnchor.constraint(equalToConstant: 400),
+            body.widthAnchor.constraint(equalTo: bodyScrollView.contentView.widthAnchor),
 
-            separator.topAnchor.constraint(equalTo: columns.bottomAnchor, constant: 10),
+            separator.topAnchor.constraint(equalTo: bodyScrollView.bottomAnchor, constant: 10),
             separator.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 14),
             separator.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -14),
 
@@ -724,6 +759,12 @@ final class DashboardViewController: NSViewController {
         column.addArrangedSubview(healthDetailLabel)
         healthStatusLabel.toolTip = "Gli avvisi richiedono pressione critica per 6s, elevata per 30s oppure swap I/O >= 5 MiB/s per 20s."
 
+        // Process-heavy apps (e.g. llama-server) deserve primary placement.
+        // With a scrollable viewport these rows remain accessible at all window sizes.
+        column.addArrangedSubview(ramTopProcesses)
+        ramTopProcesses.leadingAnchor.constraint(equalTo: column.leadingAnchor).isActive = true
+        ramTopProcesses.trailingAnchor.constraint(equalTo: column.trailingAnchor).isActive = true
+
         // RAM components are shown separately, not added together.
         for bar in [activeBar, wiredBar, compressedBar, freeBar] {
             column.addArrangedSubview(bar)
@@ -771,11 +812,6 @@ final class DashboardViewController: NSViewController {
         column.addArrangedSubview(swapSparklineView)
         swapSparklineView.leadingAnchor.constraint(equalTo: column.leadingAnchor).isActive = true
         swapSparklineView.trailingAnchor.constraint(equalTo: column.trailingAnchor).isActive = true
-
-        // Top RAM Processes
-        column.addArrangedSubview(ramTopProcesses)
-        ramTopProcesses.leadingAnchor.constraint(equalTo: column.leadingAnchor).isActive = true
-        ramTopProcesses.trailingAnchor.constraint(equalTo: column.trailingAnchor).isActive = true
 
         return column
     }
@@ -983,10 +1019,11 @@ final class DashboardViewController: NSViewController {
 
     func updateTopProcesses(
         cpu: [(pid: pid_t, name: String, valueText: String, fraction: Double, color: NSColor, tooltip: String)],
-        ram: [(pid: pid_t, name: String, valueText: String, fraction: Double, color: NSColor, tooltip: String)]
+        ram: [(pid: pid_t, name: String, valueText: String, fraction: Double, color: NSColor, tooltip: String)],
+        error: String? = nil
     ) {
-        cpuTopProcesses.update(processes: cpu)
-        ramTopProcesses.update(processes: ram)
+        cpuTopProcesses.update(processes: cpu, error: error)
+        ramTopProcesses.update(processes: ram, error: error)
     }
 }
 
@@ -1081,6 +1118,9 @@ final class MenuMeter: NSObject, NSPopoverDelegate {
         update()
         popover.contentSize = dashboard.view.fittingSize
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        // Previously the snapshot was delayed until the next 2s timer tick.
+        // Start fetching immediately after the popover becomes visible.
+        fetchTopProcesses()
     }
 
     // Mach CPU Load
