@@ -1477,7 +1477,7 @@ final class MenuMeter: NSObject, NSPopoverDelegate {
 
 #if MENUMETER_TEST
 // Pure-logic smoke tests: no GUI, no permission prompts, no synthetic swap usage.
-let sample = ProcessSnapshotParser.parse("  123  3.5  1048576 /usr/local/bin/llama server\n\t456\t0.0\t5120\tGoogle Chrome Helper\n")
+private let sample = ProcessSnapshotParser.parse("  123  3.5  1048576 /usr/local/bin/llama server\n\t456\t0.0\t5120\tGoogle Chrome Helper\n")
 assert(sample.count == 2)
 assert(sample[0].pid == 123 && sample[0].rss == 1_073_741_824)
 assert(sample[0].comm == "/usr/local/bin/llama server")
