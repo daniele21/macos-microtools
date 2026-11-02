@@ -321,6 +321,32 @@ final class SparklineView: NSView {
     }
 }
 
+// MARK: - Process sampling (deterministic parsing, testable independently)
+
+private struct ProcessSample {
+    let pid: pid_t
+    let cpu: Double
+    let rss: Double
+    let comm: String
+}
+
+private enum ProcessSnapshotParser {
+    // Separate columns with header suppression; avoid relying on a locale-dependent header.
+    static let arguments = ["-A", "-o", "pid=", "-o", "%cpu=", "-o", "rss=", "-o", "comm="]
+
+    static func parse(_ output: String) -> [ProcessSample] {
+        output.split(whereSeparator: \.isNewline).compactMap { line in
+            let fields = line.split(maxSplits: 3, omittingEmptySubsequences: true, whereSeparator: \.isWhitespace)
+            guard fields.count == 4,
+                  let pid = pid_t(fields[0]),
+                  let cpu = Double(fields[1]),
+                  let rssKB = Double(fields[2]),
+                  cpu.isFinite, rssKB.isFinite, rssKB >= 0 else { return nil }
+            return ProcessSample(pid: pid, cpu: cpu, rss: rssKB * 1024, comm: String(fields[3]))
+        }
+    }
+}
+
 // MARK: - Top Process Row & Section (Cliccabile)
 
 final class TopProcessRowView: NSView {
@@ -399,6 +425,7 @@ final class TopProcessRowView: NSView {
 
 final class TopProcessesSectionView: NSStackView {
     private let headerLabel = NSTextField(labelWithString: "")
+    private let statusLabel = NSTextField(labelWithString: "Caricamento processi…")
     private let rows: [TopProcessRowView] = [TopProcessRowView(), TopProcessRowView(), TopProcessRowView()]
 
     init(title: String) {
@@ -419,7 +446,16 @@ final class TopProcessesSectionView: NSStackView {
         headerLabel.leadingAnchor.constraint(equalTo: leadingAnchor).isActive = true
         headerLabel.trailingAnchor.constraint(equalTo: trailingAnchor).isActive = true
 
+        statusLabel.font = .systemFont(ofSize: 10, weight: .regular)
+        statusLabel.textColor = .secondaryLabelColor
+        statusLabel.lineBreakMode = .byTruncatingTail
+        statusLabel.toolTip = "I processi vengono letti quando apri il pannello."
+        addArrangedSubview(statusLabel)
+        statusLabel.leadingAnchor.constraint(equalTo: leadingAnchor).isActive = true
+        statusLabel.trailingAnchor.constraint(equalTo: trailingAnchor).isActive = true
+
         for row in rows {
+            row.isHidden = true
             addArrangedSubview(row)
             row.leadingAnchor.constraint(equalTo: leadingAnchor).isActive = true
             row.trailingAnchor.constraint(equalTo: trailingAnchor).isActive = true
@@ -428,7 +464,10 @@ final class TopProcessesSectionView: NSStackView {
 
     required init(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    func update(processes: [(pid: pid_t, name: String, valueText: String, fraction: Double, color: NSColor, tooltip: String)]) {
+    func update(processes: [(pid: pid_t, name: String, valueText: String, fraction: Double, color: NSColor, tooltip: String)], error: String? = nil) {
+        statusLabel.isHidden = !processes.isEmpty
+        statusLabel.stringValue = error ?? "Nessun processo disponibile"
+        statusLabel.toolTip = error
         for i in 0..<rows.count {
             if i < processes.count {
                 rows[i].isHidden = false
@@ -560,27 +599,49 @@ final class DashboardViewController: NSViewController {
         columns.distribution = .fillEqually
         columns.spacing = 20
 
+        // A fixed-height viewport keeps the footer visible on shorter displays.
+        // The NSStackView remains full-height inside the scrollable document.
+        let body = NSView()
+        body.translatesAutoresizingMaskIntoConstraints = false
+        body.addSubview(columns)
+        columns.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            columns.topAnchor.constraint(equalTo: body.topAnchor),
+            columns.leadingAnchor.constraint(equalTo: body.leadingAnchor),
+            columns.trailingAnchor.constraint(equalTo: body.trailingAnchor),
+            columns.bottomAnchor.constraint(equalTo: body.bottomAnchor)
+        ])
+        let bodyScrollView = NSScrollView()
+        bodyScrollView.drawsBackground = false
+        bodyScrollView.borderType = .noBorder
+        bodyScrollView.hasVerticalScroller = true
+        bodyScrollView.autohidesScrollers = true
+        bodyScrollView.verticalScrollElasticity = .allowed
+        bodyScrollView.documentView = body
+
         let separator = NSBox()
         separator.boxType = .separator
 
         let footerStack = buildFooter()
 
-        root.addSubview(columns)
+        root.addSubview(bodyScrollView)
         root.addSubview(separator)
         root.addSubview(footerStack)
 
-        columns.translatesAutoresizingMaskIntoConstraints = false
+        bodyScrollView.translatesAutoresizingMaskIntoConstraints = false
         separator.translatesAutoresizingMaskIntoConstraints = false
         footerStack.translatesAutoresizingMaskIntoConstraints = false
 
         NSLayoutConstraint.activate([
             root.widthAnchor.constraint(equalToConstant: 540),
 
-            columns.topAnchor.constraint(equalTo: root.topAnchor, constant: 14),
-            columns.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 14),
-            columns.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -14),
+            bodyScrollView.topAnchor.constraint(equalTo: root.topAnchor, constant: 14),
+            bodyScrollView.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 14),
+            bodyScrollView.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -14),
+            bodyScrollView.heightAnchor.constraint(equalToConstant: 400),
+            body.widthAnchor.constraint(equalTo: bodyScrollView.contentView.widthAnchor),
 
-            separator.topAnchor.constraint(equalTo: columns.bottomAnchor, constant: 10),
+            separator.topAnchor.constraint(equalTo: bodyScrollView.bottomAnchor, constant: 10),
             separator.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 14),
             separator.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -14),
 
@@ -724,6 +785,12 @@ final class DashboardViewController: NSViewController {
         column.addArrangedSubview(healthDetailLabel)
         healthStatusLabel.toolTip = "Gli avvisi richiedono pressione critica per 6s, elevata per 30s oppure swap I/O >= 5 MiB/s per 20s."
 
+        // Process-heavy apps (e.g. llama-server) deserve primary placement.
+        // With a scrollable viewport these rows remain accessible at all window sizes.
+        column.addArrangedSubview(ramTopProcesses)
+        ramTopProcesses.leadingAnchor.constraint(equalTo: column.leadingAnchor).isActive = true
+        ramTopProcesses.trailingAnchor.constraint(equalTo: column.trailingAnchor).isActive = true
+
         // RAM components are shown separately, not added together.
         for bar in [activeBar, wiredBar, compressedBar, freeBar] {
             column.addArrangedSubview(bar)
@@ -772,11 +839,6 @@ final class DashboardViewController: NSViewController {
         swapSparklineView.leadingAnchor.constraint(equalTo: column.leadingAnchor).isActive = true
         swapSparklineView.trailingAnchor.constraint(equalTo: column.trailingAnchor).isActive = true
 
-        // Top RAM Processes
-        column.addArrangedSubview(ramTopProcesses)
-        ramTopProcesses.leadingAnchor.constraint(equalTo: column.leadingAnchor).isActive = true
-        ramTopProcesses.trailingAnchor.constraint(equalTo: column.trailingAnchor).isActive = true
-
         return column
     }
 
@@ -797,7 +859,7 @@ final class DashboardViewController: NSViewController {
         line1.distribution = .fill
 
         // Line 2: Version, Auto-start, Quit
-        let appTitle = NSTextField(labelWithString: "MenuMeter v4")
+        let appTitle = NSTextField(labelWithString: "MenuMeter v4.1")
         appTitle.font = .systemFont(ofSize: 11, weight: .medium)
         appTitle.textColor = .tertiaryLabelColor
         appTitle.isBezeled = false
@@ -983,10 +1045,11 @@ final class DashboardViewController: NSViewController {
 
     func updateTopProcesses(
         cpu: [(pid: pid_t, name: String, valueText: String, fraction: Double, color: NSColor, tooltip: String)],
-        ram: [(pid: pid_t, name: String, valueText: String, fraction: Double, color: NSColor, tooltip: String)]
+        ram: [(pid: pid_t, name: String, valueText: String, fraction: Double, color: NSColor, tooltip: String)],
+        error: String? = nil
     ) {
-        cpuTopProcesses.update(processes: cpu)
-        ramTopProcesses.update(processes: ram)
+        cpuTopProcesses.update(processes: cpu, error: error)
+        ramTopProcesses.update(processes: ram, error: error)
     }
 }
 
@@ -1014,6 +1077,7 @@ final class MenuMeter: NSObject, NSPopoverDelegate {
 
     private var topCPUList: [(pid: pid_t, name: String, valueText: String, fraction: Double, color: NSColor, tooltip: String)] = []
     private var topRAMList: [(pid: pid_t, name: String, valueText: String, fraction: Double, color: NSColor, tooltip: String)] = []
+    private var topProcessesError: String?
 
     private var timer: Timer?
     private var lastCloseTime: TimeInterval = 0
@@ -1081,6 +1145,9 @@ final class MenuMeter: NSObject, NSPopoverDelegate {
         update()
         popover.contentSize = dashboard.view.fittingSize
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        // Previously the snapshot was delayed until the next 2s timer tick.
+        // Start fetching immediately after the popover becomes visible.
+        fetchTopProcesses()
     }
 
     // Mach CPU Load
@@ -1183,38 +1250,37 @@ final class MenuMeter: NSObject, NSPopoverDelegate {
 
         DispatchQueue.global(qos: .utility).async { [weak self] in
             let task = Process()
-            task.launchPath = "/bin/ps"
-            task.arguments = ["-A", "-c", "-o", "pid,%cpu,rss,comm", "-r"]
+            task.executableURL = URL(fileURLWithPath: "/bin/ps")
+            task.arguments = ProcessSnapshotParser.arguments
+            var env = ProcessInfo.processInfo.environment
+            env["LC_ALL"] = "C"
+            task.environment = env
             let pipe = Pipe()
+            let errorPipe = Pipe()
             task.standardOutput = pipe
+            task.standardError = errorPipe
 
-            struct ProcItem {
-                let pid: pid_t
-                let cpu: Double
-                let rss: Double
-                let comm: String
-            }
-
-            var items: [ProcItem] = []
+            var items: [ProcessSample] = []
+            var errorMessage: String?
 
             do {
                 try task.run()
-                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                let outputData = pipe.fileHandleForReading.readDataToEndOfFile()
                 task.waitUntilExit()
-
-                if let output = String(data: data, encoding: .utf8) {
-                    let lines = output.components(separatedBy: "\n")
-                    for line in lines.dropFirst() {
-                        let parts = line.trimmingCharacters(in: .whitespaces).split(separator: " ", maxSplits: 3, omittingEmptySubsequences: true)
-                        guard parts.count == 4,
-                              let pid = pid_t(parts[0]),
-                              let cpu = Double(parts[1]),
-                              let rssKB = Double(parts[2]) else { continue }
-                        items.append(ProcItem(pid: pid, cpu: cpu, rss: rssKB * 1024, comm: String(parts[3])))
+                if task.terminationStatus != 0 {
+                    let stderr = String(data: errorPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
+                        .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    errorMessage = stderr.isEmpty ? "Errore ps (codice \(task.terminationStatus))" : "Errore ps: \(stderr)"
+                } else if let output = String(data: outputData, encoding: .utf8) {
+                    items = ProcessSnapshotParser.parse(output)
+                    if items.isEmpty {
+                        errorMessage = "ps non ha restituito processi validi"
                     }
+                } else {
+                    errorMessage = "Output ps non leggibile (UTF-8)"
                 }
             } catch {
-                // ignore
+                errorMessage = "Impossibile eseguire ps: \(error.localizedDescription)"
             }
 
             // Top CPU by distinct process
@@ -1243,7 +1309,8 @@ final class MenuMeter: NSObject, NSPopoverDelegate {
                 self.isFetchingProcesses = false
                 self.topCPUList = Array(topCPU)
                 self.topRAMList = Array(topRAM)
-                self.dashboard.updateTopProcesses(cpu: self.topCPUList, ram: self.topRAMList)
+                self.topProcessesError = errorMessage
+                self.dashboard.updateTopProcesses(cpu: self.topCPUList, ram: self.topRAMList, error: errorMessage)
             }
         }
     }
@@ -1276,6 +1343,10 @@ final class MenuMeter: NSObject, NSPopoverDelegate {
             let swapAllocated = ram.swapTotal.map(formatBytes) ?? "Non disponibile"
             lines.append("Swap su disco: \(swapAmount) · Allocata dinamicamente: \(swapAllocated) (non è un limite massimo fisso)")
             lines.append("Swap I/O: in \(formatRate(ram.swapInRate)) · out \(formatRate(ram.swapOutRate)) · Picco 60s: \(formatRate(swapHistory.max() ?? 0))")
+        }
+
+        if let error = topProcessesError {
+            lines.append("Raccolta processi: \(error)")
         }
 
         if !topCPUList.isEmpty {
@@ -1406,6 +1477,23 @@ final class MenuMeter: NSObject, NSPopoverDelegate {
 
 #if MENUMETER_TEST
 // Pure-logic smoke tests: no GUI, no permission prompts, no synthetic swap usage.
+private let sample = ProcessSnapshotParser.parse("  123  3.5  1048576 /usr/local/bin/llama server\n\t456\t0.0\t5120\tGoogle Chrome Helper\n")
+assert(sample.count == 2)
+assert(sample[0].pid == 123 && sample[0].rss == 1_073_741_824)
+assert(sample[0].comm == "/usr/local/bin/llama server")
+assert(sample[1].pid == 456 && sample[1].comm == "Google Chrome Helper")
+assert(ProcessSnapshotParser.parse("bogus input\n").isEmpty)
+let psCheck = Process()
+psCheck.executableURL = URL(fileURLWithPath: "/bin/ps")
+psCheck.arguments = ProcessSnapshotParser.arguments
+let psOutput = Pipe()
+psCheck.standardOutput = psOutput
+try psCheck.run()
+let realProcesses = psOutput.fileHandleForReading.readDataToEndOfFile()
+psCheck.waitUntilExit()
+assert(psCheck.terminationStatus == 0)
+assert(!ProcessSnapshotParser.parse(String(data: realProcesses, encoding: .utf8) ?? "").isEmpty,
+       "macOS ps must return at least one parsed RSS process")
 let normal = MemoryHealthAnalyzer.assess(pressureLevels: Array(repeating: 1, count: 30), swapRates: Array(repeating: 0, count: 30))
 assert(normal.severity == 0 && normal.status == "Memoria stabile")
 let briefYellow = MemoryHealthAnalyzer.assess(pressureLevels: [1, 1, 2, 2], swapRates: [0, 0, 0, 0])

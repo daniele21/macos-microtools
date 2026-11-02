@@ -1,10 +1,18 @@
-# MenuMeter v4
+# MenuMeter v4.1
 
 A minimalist, high-performance macOS menu bar monitor for CPU, RAM, Memory Pressure, Swap I/O, and Thermal State.
 
 Written in a single Swift file using 100% native Apple frameworks (AppKit, Mach, Darwin). Zero third-party dependencies, zero Electron, zero bloat (<45MB RAM footprint, 0% idle CPU).
 
 ---
+
+## What changed in v4.1
+
+- **Top RAM/RSS is visible higher in the RAM column**, immediately after the pressure health summary rather than after every memory bar and swap chart.
+- **Scrollable dashboard** with a fixed-height viewport: no hidden bottom rows when the available menu bar display height is limited, or when CPU cores are expanded. The footer stays accessible.
+- **Immediate process sampling when the popover opens** instead of waiting up to two seconds for the next timer tick.
+- **Explicit loading/empty/error state** in both CPU and RSS process sections. An empty process scan no longer fails silently.
+- **Robust macOS \`ps\` parsing**: whitespace-agnostic and independent of column headers or current locale, with smoke tests using the actual \`/bin/ps\` in macOS CI.
 
 ## What changed in v4
 
