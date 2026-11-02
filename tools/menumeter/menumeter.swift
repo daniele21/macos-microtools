@@ -995,6 +995,9 @@ final class MenuMeter: NSObject, NSPopoverDelegate {
     private var lastTicks: [UInt32]?
     private var cpuHistory: [Double] = []
     private var ramHistory: [Double] = []
+    private var pressureHistory: [Int] = []
+    private var swapHistory: [Double] = []
+    private var latestHealth: MemoryHealthAssessment?
     private var recentCPUSamples: [Double] = []
 
     private var lastSwapIns: UInt64?
@@ -1010,6 +1013,7 @@ final class MenuMeter: NSObject, NSPopoverDelegate {
     private var timer: Timer?
     private var lastCloseTime: TimeInterval = 0
     private var isFetchingProcesses = false
+    private var lastProcessFetch: TimeInterval = -100
 
     override init() {
         super.init()
@@ -1167,8 +1171,10 @@ final class MenuMeter: NSObject, NSPopoverDelegate {
 
     // P0: Fetch Top Processes by distinct PID & app info (solo a popover aperto)
     private func fetchTopProcesses() {
-        guard !isFetchingProcesses else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        guard !isFetchingProcesses, now - lastProcessFetch >= 6 else { return }
         isFetchingProcesses = true
+        lastProcessFetch = now
 
         DispatchQueue.global(qos: .utility).async { [weak self] in
             let task = Process()
@@ -1257,12 +1263,14 @@ final class MenuMeter: NSObject, NSPopoverDelegate {
             let pressName = ram.pressure?.name ?? "Non disponibile"
             lines.append("RAM: \(String(format: "%.1f / %.1f GiB (%.0f%%)", usedGiB, totalGiB, pct)) · Pressione: \(pressName)")
             lines.append("RAM dettaglio: Attiva \(formatBytes(ram.active)) · Cablata \(formatBytes(ram.wired)) · Compressa \(formatBytes(ram.compressed)) · Libera \(formatBytes(ram.free))")
+            if let health = latestHealth {
+                lines.append("Diagnosi (finestra 60s): \(health.status) · \(health.detail)")
+            }
 
-            let swapU = (ram.swapUsed ?? 0) / gib
-            let swapT = (ram.swapTotal ?? 0) / gib
-            let swapRateTotal = ram.swapInRate + ram.swapOutRate
-            let swapRateText = swapRateTotal < kib ? "Inattiva (0 KB/s)" : "Attiva: in \(formatRate(ram.swapInRate)) · out \(formatRate(ram.swapOutRate))"
-            lines.append("Swap: \(String(format: "%.1f / %.1f GiB", swapU, swapT)) · Attività: \(swapRateText)")
+            let swapAmount = ram.swapUsed.map(formatBytes) ?? "Non disponibile"
+            let swapAllocated = ram.swapTotal.map(formatBytes) ?? "Non disponibile"
+            lines.append("Swap su disco: \(swapAmount) · Allocata dinamicamente: \(swapAllocated) (non è un limite massimo fisso)")
+            lines.append("Swap I/O: in \(formatRate(ram.swapInRate)) · out \(formatRate(ram.swapOutRate)) · Picco 60s: \(formatRate(swapHistory.max() ?? 0))")
         }
 
         if !topCPUList.isEmpty {
@@ -1331,6 +1339,12 @@ final class MenuMeter: NSObject, NSPopoverDelegate {
             lastSwapSampleTime = now
 
             let pressure = memoryPressureStatus()
+            pressureHistory.append(pressure?.level ?? 0)
+            swapHistory.append(swapInRate + swapOutRate)
+            if pressureHistory.count > 30 { pressureHistory.removeFirst(pressureHistory.count - 30) }
+            if swapHistory.count > 30 { swapHistory.removeFirst(swapHistory.count - 30) }
+            let health = MemoryHealthAnalyzer.assess(pressureLevels: pressureHistory, swapRates: swapHistory)
+            latestHealth = health
 
             let usedPct = ramData.total == 0 ? 0 : (used / ramData.total) * 100.0
             ramHistory.append(usedPct)
@@ -1364,11 +1378,15 @@ final class MenuMeter: NSObject, NSPopoverDelegate {
                 swapInRate: swapInRate,
                 swapOutRate: swapOutRate,
                 pressure: pressure,
-                history: ramHistory
+                history: ramHistory,
+                pressureHistory: pressureHistory,
+                swapHistory: swapHistory,
+                health: health
             )
 
             let cpuText = cpu.map { String(format: "%.0f%%", $0.total) } ?? "…"
-            status.button?.title = "CPU \(cpuText) · RAM \(String(format: "%.0f%%", usedPct))"
+            let alertGlyph = health.severity == 2 ? " ■" : (health.severity == 1 ? " ▲" : "")
+            status.button?.title = "CPU \(cpuText) · RAM \(String(format: "%.0f%%", usedPct))\(alertGlyph)"
         }
 
         if popover.isShown {
