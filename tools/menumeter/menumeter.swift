@@ -703,12 +703,47 @@ final class DashboardViewController: NSViewController {
         pressureStack.leadingAnchor.constraint(equalTo: column.leadingAnchor).isActive = true
         pressureStack.trailingAnchor.constraint(equalTo: column.trailingAnchor).isActive = true
 
-        // RAM Bars: Attiva, Cablata, Compressa, Libera, Swap
-        for bar in [activeBar, wiredBar, compressedBar, freeBar, swapUsedBar] {
+        // Compact native pressure-state history (not a RAM usage percentage).
+        pressureHistoryLabel.font = .systemFont(ofSize: 10, weight: .medium)
+        pressureHistoryLabel.textColor = .tertiaryLabelColor
+        column.addArrangedSubview(pressureHistoryLabel)
+
+        pressureHistoryView.translatesAutoresizingMaskIntoConstraints = false
+        pressureHistoryView.heightAnchor.constraint(equalToConstant: 8).isActive = true
+        column.addArrangedSubview(pressureHistoryView)
+        pressureHistoryView.leadingAnchor.constraint(equalTo: column.leadingAnchor).isActive = true
+        pressureHistoryView.trailingAnchor.constraint(equalTo: column.trailingAnchor).isActive = true
+
+        healthStatusLabel.font = .systemFont(ofSize: 11, weight: .semibold)
+        healthStatusLabel.textColor = .systemGreen
+        healthDetailLabel.font = .systemFont(ofSize: 10, weight: .regular)
+        healthDetailLabel.textColor = .secondaryLabelColor
+        healthDetailLabel.lineBreakMode = .byWordWrapping
+        healthDetailLabel.maximumNumberOfLines = 2
+        column.addArrangedSubview(healthStatusLabel)
+        column.addArrangedSubview(healthDetailLabel)
+        healthStatusLabel.toolTip = "Gli avvisi richiedono pressione critica per 6s, elevata per 30s oppure swap I/O >= 5 MiB/s per 20s."
+
+        // RAM components are shown separately, not added together.
+        for bar in [activeBar, wiredBar, compressedBar, freeBar] {
             column.addArrangedSubview(bar)
             bar.leadingAnchor.constraint(equalTo: column.leadingAnchor).isActive = true
             bar.trailingAnchor.constraint(equalTo: column.trailingAnchor).isActive = true
         }
+
+        // Occupied disk swap is an amount, not a percentage of a fixed capacity.
+        swapUsageTitle.font = .systemFont(ofSize: 11.5, weight: .medium)
+        swapUsageTitle.textColor = .secondaryLabelColor
+        swapUsageValue.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+        swapUsageValue.textColor = .secondaryLabelColor
+        swapUsageValue.alignment = .right
+        let swapUsageRow = NSStackView(views: [swapUsageTitle, swapUsageValue])
+        swapUsageRow.orientation = .horizontal
+        swapUsageRow.distribution = .fill
+        swapUsageRow.toolTip = "La dimensione della swap allocata da macOS è dinamica, non un limite fisso. Contano soprattutto pressione memoria e I/O."
+        column.addArrangedSubview(swapUsageRow)
+        swapUsageRow.leadingAnchor.constraint(equalTo: column.leadingAnchor).isActive = true
+        swapUsageRow.trailingAnchor.constraint(equalTo: column.trailingAnchor).isActive = true
 
         // Swap Activity Row
         swapActivityTitle.font = .systemFont(ofSize: 11.5, weight: .medium)
@@ -725,6 +760,17 @@ final class DashboardViewController: NSViewController {
         column.addArrangedSubview(swapActivityStack)
         swapActivityStack.leadingAnchor.constraint(equalTo: column.leadingAnchor).isActive = true
         swapActivityStack.trailingAnchor.constraint(equalTo: column.trailingAnchor).isActive = true
+
+        swapSparklineCaption.font = .systemFont(ofSize: 10, weight: .medium)
+        swapSparklineCaption.textColor = .tertiaryLabelColor
+        column.addArrangedSubview(swapSparklineCaption)
+        swapSparklineView.strokeColor = .systemTeal
+        swapSparklineView.fillColor = NSColor.systemTeal.withAlphaComponent(0.14)
+        swapSparklineView.translatesAutoresizingMaskIntoConstraints = false
+        swapSparklineView.heightAnchor.constraint(equalToConstant: 26).isActive = true
+        column.addArrangedSubview(swapSparklineView)
+        swapSparklineView.leadingAnchor.constraint(equalTo: column.leadingAnchor).isActive = true
+        swapSparklineView.trailingAnchor.constraint(equalTo: column.trailingAnchor).isActive = true
 
         // Top RAM Processes
         column.addArrangedSubview(ramTopProcesses)
