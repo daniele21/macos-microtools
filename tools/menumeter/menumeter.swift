@@ -84,8 +84,8 @@ private enum MemoryHealthAnalyzer {
         if current == 4 || current == 2 {
             return MemoryHealthAssessment(status: "Pressione da osservare", detail: "Picco recente: nessun allarme persistente.", severity: 0)
         }
-        if current == 0 {
-            return MemoryHealthAssessment(status: "Pressione non disponibile", detail: "Impossibile leggere lo stato dal kernel.", severity: 0)
+        if current != 1 {
+            return MemoryHealthAssessment(status: "Pressione non disponibile", detail: "Stato non riconosciuto o lettura non riuscita.", severity: 0)
         }
         return MemoryHealthAssessment(status: "Memoria stabile", detail: "Nessun segnale persistente di difficoltà.", severity: 0)
     }
@@ -927,11 +927,16 @@ final class DashboardViewController: NSViewController {
                 pressureBadgeLabel.textColor = .systemYellow
                 ramValueLabel.textColor = .systemYellow
                 ramSparklineView.strokeColor = .systemYellow
-            default:
+            case 1:
                 pressureBadgeLabel.stringValue = "● Normale"
                 pressureBadgeLabel.textColor = .systemGreen
                 ramValueLabel.textColor = .systemGreen
                 ramSparklineView.strokeColor = .systemGreen
+            default:
+                pressureBadgeLabel.stringValue = "Non disponibile"
+                pressureBadgeLabel.textColor = .secondaryLabelColor
+                ramValueLabel.textColor = .labelColor
+                ramSparklineView.strokeColor = .systemGray
             }
         } else {
             pressureBadgeLabel.stringValue = "Non disponibile"
@@ -1415,6 +1420,8 @@ let briefSwap = MemoryHealthAnalyzer.assess(pressureLevels: [1, 1], swapRates: [
 assert(briefSwap.severity == 0)
 let unknown = MemoryHealthAnalyzer.assess(pressureLevels: [0], swapRates: [0])
 assert(unknown.status == "Pressione non disponibile")
+let unrecognized = MemoryHealthAnalyzer.assess(pressureLevels: [3], swapRates: [0])
+assert(unrecognized.status == "Pressione non disponibile")
 // Occupied-but-idle swap must not trigger an alert: only actual I/O and pressure count.
 let recovered = MemoryHealthAnalyzer.assess(pressureLevels: [2, 2, 2, 1], swapRates: [6 * mib, 6 * mib, 6 * mib, 0])
 assert(recovered.severity == 0)
