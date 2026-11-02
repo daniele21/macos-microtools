@@ -859,7 +859,7 @@ final class DashboardViewController: NSViewController {
         line1.distribution = .fill
 
         // Line 2: Version, Auto-start, Quit
-        let appTitle = NSTextField(labelWithString: "MenuMeter v4")
+        let appTitle = NSTextField(labelWithString: "MenuMeter v4.1")
         appTitle.font = .systemFont(ofSize: 11, weight: .medium)
         appTitle.textColor = .tertiaryLabelColor
         appTitle.isBezeled = false
