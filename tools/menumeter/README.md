@@ -1,10 +1,25 @@
-# MenuMeter
+# MenuMeter v4
 
 A minimalist, high-performance macOS menu bar monitor for CPU, RAM, Memory Pressure, Swap I/O, and Thermal State.
 
 Written in a single Swift file using 100% native Apple frameworks (AppKit, Mach, Darwin). Zero third-party dependencies, zero Electron, zero bloat (<45MB RAM footprint, 0% idle CPU).
 
 ---
+
+## What changed in v4
+
+- **Swap is not a fixed-capacity meter:** the dashboard shows disk swap used as an amount; the dynamically allocated total is available in a tooltip and copied diagnostics. A nearly full allocated amount is not itself an alert.
+- **Pressure timeline (60s):** a compact strip of kernel memory-pressure states (green/yellow/red), sampled every 2 seconds.
+- **Swap I/O trend (60s):** direction-aware instantaneous rates (↓ swap-in reads and ↑ swap-out writes), plus rolling peak. The chart auto-scales to its displayed peak.
+- **Sustained memory-health indicator** beside the memory section, with a matching ▲/■ in the menu bar only after:
+  - >= 6 seconds of continuous critical pressure;
+  - >= 30 seconds of continuous elevated/critical pressure; or
+  - >= 20 seconds of sustained swap I/O >= 5 MiB/s.
+- **Rate labels use MiB/s and KiB/s**, matching the actual binary divisor.
+- **Lower background overhead:** top-process scan is still on-demand, but also throttled to at most once every 6 seconds while the popover is open.
+- **No destructive action**: MenuMeter never empties swap or terminates memory-hungry processes automatically.
+
+These are pragmatic alert thresholds, not Apple-defined pressure thresholds or diagnostic proof of thrashing. A two-second sampling period means brief events can be missed. Process RSS estimates are not additive. The CPU and RAM percentages, pressure signal and swap rates answer different questions.
 
 ## Features
 
@@ -15,9 +30,9 @@ Written in a single Swift file using 100% native Apple frameworks (AppKit, Mach,
   - `● Normale` (Green)
   - `▲ Attenzione` (Yellow)
   - `■ Critica` (Red)
-- **Active Swap I/O Tracking**: Distinguishes between dormant disk swap and active memory thrashing (`Inattiva (0 KB/s)` vs `Attiva: in X MB/s · out Y MB/s`).
+- **Active Swap I/O Tracking**: Distinguishes between dormant disk swap and active memory thrashing (direction-aware ↓ swap-in and ↑ swap-out rates, plus the 60s trend).
 - **Top Processes (On-Demand)**:
-  - Scanned **only when the popover is opened** (zero background CPU usage).
+  - Scanned **only while the popover is open**, at most once every 6 seconds.
   - Tracked by distinct PID with app names resolved via `NSRunningApplication`.
   - **Interactive**: Hover for full details, click to activate the application or inspect in Activity Monitor.
 - **Mac Thermal State**: Displays hardware thermal status (`ProcessInfo.thermalState`) to identify thermal throttling during builds or local AI inference.
@@ -31,6 +46,12 @@ Written in a single Swift file using 100% native Apple frameworks (AppKit, Mach,
 ```bash
 # From the repository root:
 make install
+
+# Rebuild and restart ONLY MenuMeter after updates:
+make refresh-menumeter
+
+# Native macOS typecheck + deterministic memory-health tests:
+make test-menumeter
 ```
 
 Or compile manually in one command:

@@ -21,11 +21,11 @@ private func formatBytes(_ bytes: Double) -> String {
 
 private func formatRate(_ bytesPerSec: Double) -> String {
     if bytesPerSec >= mib {
-        return String(format: "%.1f MB/s", bytesPerSec / mib)
+        return String(format: "%.1f MiB/s", bytesPerSec / mib)
     } else if bytesPerSec >= kib {
-        return String(format: "%.0f KB/s", bytesPerSec / kib)
+        return String(format: "%.0f KiB/s", bytesPerSec / kib)
     } else {
-        return "0 KB/s"
+        return "0 KiB/s"
     }
 }
 
@@ -52,6 +52,42 @@ private func thermalStatus() -> (text: String, color: NSColor) {
         return ("Critico", .systemRed)
     @unknown default:
         return ("Non disp.", .secondaryLabelColor)
+    }
+}
+
+// MARK: - Memory health: sustained conditions, not swap capacity
+
+struct MemoryHealthAssessment {
+    let status: String
+    let detail: String
+    let severity: Int  // 0 = normal, 1 = warning, 2 = critical
+}
+
+private enum MemoryHealthAnalyzer {
+    // Caller samples every 2s; windows are bounded to the latest 60s.
+    // Brief bursts remain visible in the graphs without causing an alert.
+    static func assess(pressureLevels: [Int], swapRates: [Double]) -> MemoryHealthAssessment {
+        let current = pressureLevels.last ?? 0
+        let redSeconds = pressureLevels.reversed().prefix(while: { $0 == 4 }).count * 2
+        let elevatedSeconds = pressureLevels.reversed().prefix(while: { $0 == 2 || $0 == 4 }).count * 2
+        let heavySwapSeconds = swapRates.reversed().prefix(while: { $0 >= 5.0 * mib }).count * 2
+
+        if redSeconds >= 6 {
+            return MemoryHealthAssessment(status: "Pressione critica persistente", detail: "Critica da almeno \(redSeconds)s. Riduci i carichi di memoria.", severity: 2)
+        }
+        if heavySwapSeconds >= 20 {
+            return MemoryHealthAssessment(status: "Swap I/O intensa", detail: "Letture/scritture elevate da almeno \(heavySwapSeconds)s.", severity: 1)
+        }
+        if elevatedSeconds >= 30 {
+            return MemoryHealthAssessment(status: "Pressione elevata persistente", detail: "Pressione elevata da almeno \(elevatedSeconds)s.", severity: 1)
+        }
+        if current == 4 || current == 2 {
+            return MemoryHealthAssessment(status: "Pressione da osservare", detail: "Picco recente: nessun allarme persistente.", severity: 0)
+        }
+        if current != 1 {
+            return MemoryHealthAssessment(status: "Pressione non disponibile", detail: "Stato non riconosciuto o lettura non riuscita.", severity: 0)
+        }
+        return MemoryHealthAssessment(status: "Memoria stabile", detail: "Nessun segnale persistente di difficoltà.", severity: 0)
     }
 }
 
@@ -105,6 +141,37 @@ final class ProgressTrackView: NSView {
         let clamped = CGFloat(max(0.0, min(1.0, fraction.isNaN ? 0.0 : fraction)))
         fillLayer.frame = CGRect(x: 0, y: 0, width: bounds.width * clamped, height: bounds.height)
         fillLayer.isHidden = clamped <= 0.001
+    }
+}
+
+// MARK: - 60-second pressure strip (green/yellow/red, not a percentage)
+
+final class PressureStripView: NSView {
+    var levels: [Int] = [] {
+        didSet { needsDisplay = true }
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        let recent = Array(levels.suffix(30))
+        let count = 30
+        let spacing: CGFloat = 2
+        let itemWidth = max(1, (bounds.width - CGFloat(count - 1) * spacing) / CGFloat(count))
+        guard itemWidth > 0, bounds.height > 0 else { return }
+        let offset = count - recent.count
+
+        for (index, level) in recent.enumerated() {
+            let x = CGFloat(offset + index) * (itemWidth + spacing)
+            let color: NSColor
+            switch level {
+            case 4: color = .systemRed
+            case 2: color = .systemYellow
+            case 1: color = .systemGreen
+            default: color = .quaternaryLabelColor
+            }
+            color.setFill()
+            NSBezierPath(roundedRect: NSRect(x: x, y: 0, width: itemWidth, height: bounds.height), xRadius: 2, yRadius: 2).fill()
+        }
     }
 }
 
@@ -451,15 +518,22 @@ final class DashboardViewController: NSViewController {
 
     let pressureTitleLabel = NSTextField(labelWithString: "Pressione memoria")
     let pressureBadgeLabel = NSTextField(labelWithString: "● Normale")
+    let pressureHistoryLabel = NSTextField(labelWithString: "PRESSIONE · ULTIMI 60s")
+    let pressureHistoryView = PressureStripView()
+    let healthStatusLabel = NSTextField(labelWithString: "● Memoria stabile")
+    let healthDetailLabel = NSTextField(labelWithString: "Nessun allarme persistente")
 
     let activeBar = MetricBarView(title: "Attiva", valueText: "0 GiB", fraction: 0, color: .systemCyan)
     let wiredBar = MetricBarView(title: "Cablata", valueText: "0 GiB", fraction: 0, color: .systemIndigo)
     let compressedBar = MetricBarView(title: "Compressa", valueText: "0 GiB", fraction: 0, color: .systemPurple)
     let freeBar = MetricBarView(title: "Libera", valueText: "0 GiB", fraction: 0, color: .systemGray)
-    let swapUsedBar = MetricBarView(title: "Swap occupata", valueText: "0 GiB", fraction: 0, color: .systemOrange)
+    let swapUsageTitle = NSTextField(labelWithString: "Swap su disco")
+    let swapUsageValue = NSTextField(labelWithString: "Non disponibile")
+    let swapSparklineView = SparklineView()
+    let swapSparklineCaption = NSTextField(labelWithString: "I/O ultimi 60s")
 
-    let swapActivityTitle = NSTextField(labelWithString: "Attività swap")
-    let swapActivityValue = NSTextField(labelWithString: "Inattiva (0 KB/s)")
+    let swapActivityTitle = NSTextField(labelWithString: "I/O")
+    let swapActivityValue = NSTextField(labelWithString: "↓ 0 KiB/s · ↑ 0 KiB/s")
 
     let ramTopProcesses = TopProcessesSectionView(title: "TOP PROCESSI RAM (RSS)")
 
@@ -629,12 +703,47 @@ final class DashboardViewController: NSViewController {
         pressureStack.leadingAnchor.constraint(equalTo: column.leadingAnchor).isActive = true
         pressureStack.trailingAnchor.constraint(equalTo: column.trailingAnchor).isActive = true
 
-        // RAM Bars: Attiva, Cablata, Compressa, Libera, Swap
-        for bar in [activeBar, wiredBar, compressedBar, freeBar, swapUsedBar] {
+        // Compact native pressure-state history (not a RAM usage percentage).
+        pressureHistoryLabel.font = .systemFont(ofSize: 10, weight: .medium)
+        pressureHistoryLabel.textColor = .tertiaryLabelColor
+        column.addArrangedSubview(pressureHistoryLabel)
+
+        pressureHistoryView.translatesAutoresizingMaskIntoConstraints = false
+        pressureHistoryView.heightAnchor.constraint(equalToConstant: 8).isActive = true
+        column.addArrangedSubview(pressureHistoryView)
+        pressureHistoryView.leadingAnchor.constraint(equalTo: column.leadingAnchor).isActive = true
+        pressureHistoryView.trailingAnchor.constraint(equalTo: column.trailingAnchor).isActive = true
+
+        healthStatusLabel.font = .systemFont(ofSize: 11, weight: .semibold)
+        healthStatusLabel.textColor = .systemGreen
+        healthDetailLabel.font = .systemFont(ofSize: 10, weight: .regular)
+        healthDetailLabel.textColor = .secondaryLabelColor
+        healthDetailLabel.lineBreakMode = .byWordWrapping
+        healthDetailLabel.maximumNumberOfLines = 2
+        column.addArrangedSubview(healthStatusLabel)
+        column.addArrangedSubview(healthDetailLabel)
+        healthStatusLabel.toolTip = "Gli avvisi richiedono pressione critica per 6s, elevata per 30s oppure swap I/O >= 5 MiB/s per 20s."
+
+        // RAM components are shown separately, not added together.
+        for bar in [activeBar, wiredBar, compressedBar, freeBar] {
             column.addArrangedSubview(bar)
             bar.leadingAnchor.constraint(equalTo: column.leadingAnchor).isActive = true
             bar.trailingAnchor.constraint(equalTo: column.trailingAnchor).isActive = true
         }
+
+        // Occupied disk swap is an amount, not a percentage of a fixed capacity.
+        swapUsageTitle.font = .systemFont(ofSize: 11.5, weight: .medium)
+        swapUsageTitle.textColor = .secondaryLabelColor
+        swapUsageValue.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+        swapUsageValue.textColor = .secondaryLabelColor
+        swapUsageValue.alignment = .right
+        let swapUsageRow = NSStackView(views: [swapUsageTitle, swapUsageValue])
+        swapUsageRow.orientation = .horizontal
+        swapUsageRow.distribution = .fill
+        swapUsageRow.toolTip = "La dimensione della swap allocata da macOS è dinamica, non un limite fisso. Contano soprattutto pressione memoria e I/O."
+        column.addArrangedSubview(swapUsageRow)
+        swapUsageRow.leadingAnchor.constraint(equalTo: column.leadingAnchor).isActive = true
+        swapUsageRow.trailingAnchor.constraint(equalTo: column.trailingAnchor).isActive = true
 
         // Swap Activity Row
         swapActivityTitle.font = .systemFont(ofSize: 11.5, weight: .medium)
@@ -651,6 +760,17 @@ final class DashboardViewController: NSViewController {
         column.addArrangedSubview(swapActivityStack)
         swapActivityStack.leadingAnchor.constraint(equalTo: column.leadingAnchor).isActive = true
         swapActivityStack.trailingAnchor.constraint(equalTo: column.trailingAnchor).isActive = true
+
+        swapSparklineCaption.font = .systemFont(ofSize: 10, weight: .medium)
+        swapSparklineCaption.textColor = .tertiaryLabelColor
+        column.addArrangedSubview(swapSparklineCaption)
+        swapSparklineView.strokeColor = .systemTeal
+        swapSparklineView.fillColor = NSColor.systemTeal.withAlphaComponent(0.14)
+        swapSparklineView.translatesAutoresizingMaskIntoConstraints = false
+        swapSparklineView.heightAnchor.constraint(equalToConstant: 26).isActive = true
+        column.addArrangedSubview(swapSparklineView)
+        swapSparklineView.leadingAnchor.constraint(equalTo: column.leadingAnchor).isActive = true
+        swapSparklineView.trailingAnchor.constraint(equalTo: column.trailingAnchor).isActive = true
 
         // Top RAM Processes
         column.addArrangedSubview(ramTopProcesses)
@@ -677,7 +797,7 @@ final class DashboardViewController: NSViewController {
         line1.distribution = .fill
 
         // Line 2: Version, Auto-start, Quit
-        let appTitle = NSTextField(labelWithString: "MenuMeter v3")
+        let appTitle = NSTextField(labelWithString: "MenuMeter v4")
         appTitle.font = .systemFont(ofSize: 11, weight: .medium)
         appTitle.textColor = .tertiaryLabelColor
         appTitle.isBezeled = false
@@ -782,7 +902,10 @@ final class DashboardViewController: NSViewController {
         swapInRate: Double,
         swapOutRate: Double,
         pressure: (name: String, color: NSColor, level: Int)?,
-        history: [Double]
+        history: [Double],
+        pressureHistory: [Int],
+        swapHistory: [Double],
+        health: MemoryHealthAssessment
     ) {
         let totalGiB = total / gib
         let usedGiB = used / gib
@@ -804,11 +927,16 @@ final class DashboardViewController: NSViewController {
                 pressureBadgeLabel.textColor = .systemYellow
                 ramValueLabel.textColor = .systemYellow
                 ramSparklineView.strokeColor = .systemYellow
-            default:
+            case 1:
                 pressureBadgeLabel.stringValue = "● Normale"
                 pressureBadgeLabel.textColor = .systemGreen
                 ramValueLabel.textColor = .systemGreen
                 ramSparklineView.strokeColor = .systemGreen
+            default:
+                pressureBadgeLabel.stringValue = "Non disponibile"
+                pressureBadgeLabel.textColor = .secondaryLabelColor
+                ramValueLabel.textColor = .labelColor
+                ramSparklineView.strokeColor = .systemGray
             }
         } else {
             pressureBadgeLabel.stringValue = "Non disponibile"
@@ -817,6 +945,11 @@ final class DashboardViewController: NSViewController {
             ramSparklineView.strokeColor = .systemGreen
         }
 
+        pressureHistoryView.levels = pressureHistory
+        healthStatusLabel.stringValue = (health.severity == 2 ? "■ " : health.severity == 1 ? "▲ " : "● ") + health.status
+        healthStatusLabel.textColor = health.severity == 2 ? .systemRed : (health.severity == 1 ? .systemOrange : .secondaryLabelColor)
+        healthDetailLabel.stringValue = health.detail
+
         activeBar.update(valueText: formatBytes(active), fraction: total == 0 ? 0 : active / total)
         wiredBar.update(valueText: formatBytes(wired), fraction: total == 0 ? 0 : wired / total)
         compressedBar.update(valueText: formatBytes(compressed), fraction: total == 0 ? 0 : compressed / total)
@@ -824,35 +957,23 @@ final class DashboardViewController: NSViewController {
 
         let totalSwapRate = swapInRate + swapOutRate
 
-        // Swap occupata: arancione/rosso SOLO se c'è attività attiva o soglia elevata sostenuta
-        if let sUsed = swapUsed, let sTotal = swapTotal, sTotal > 0 {
-            let frac = min(sUsed / sTotal, 1.0)
-            let swapBarColor: NSColor
-            if totalSwapRate > (mib * 5) {
-                swapBarColor = .systemRed
-            } else if totalSwapRate > (kib * 250) {
-                swapBarColor = .systemOrange
-            } else {
-                swapBarColor = .systemGray
-            }
-
-            swapUsedBar.update(
-                valueText: String(format: "%.1f / %.1f GiB", sUsed / gib, sTotal / gib),
-                fraction: frac,
-                color: swapBarColor
-            )
+        if let sUsed = swapUsed {
+            swapUsageValue.stringValue = formatBytes(sUsed)
+            swapUsageValue.toolTip = swapTotal.map { "Swap allocata da macOS: \(formatBytes($0)). La quantità allocata può variare." }
         } else {
-            swapUsedBar.update(valueText: "0.0 GiB", fraction: 0, color: .systemGray)
+            swapUsageValue.stringValue = "Non disponibile"
+            swapUsageValue.toolTip = nil
         }
 
-        // Swap activity rate
-        if totalSwapRate < kib {
-            swapActivityValue.stringValue = "Inattiva (0 KB/s)"
-            swapActivityValue.textColor = .secondaryLabelColor
-        } else {
-            swapActivityValue.stringValue = "Attiva: in \(formatRate(swapInRate)) · out \(formatRate(swapOutRate))"
-            swapActivityValue.textColor = totalSwapRate > (mib * 5) ? .systemRed : .systemOrange
-        }
+        // Separate directions: swap-in reads pages from disk, swap-out writes them.
+        swapActivityValue.stringValue = "↓ \(formatRate(swapInRate)) · ↑ \(formatRate(swapOutRate))"
+        swapActivityValue.textColor = totalSwapRate > (mib * 5) ? .systemOrange : .secondaryLabelColor
+
+        // Normalize to the visible 60s peak, not a magic fixed maximum.
+        let actualPeak = swapHistory.max() ?? 0
+        let scale = max(mib, actualPeak)
+        swapSparklineView.values = swapHistory.map { min(100.0, max(0.0, 100.0 * $0 / scale)) }
+        swapSparklineCaption.stringValue = "SWAP I/O · 60s · picco \(formatRate(actualPeak))"
 
         // Thermal State
         let thermal = thermalStatus()
@@ -879,6 +1000,9 @@ final class MenuMeter: NSObject, NSPopoverDelegate {
     private var lastTicks: [UInt32]?
     private var cpuHistory: [Double] = []
     private var ramHistory: [Double] = []
+    private var pressureHistory: [Int] = []
+    private var swapHistory: [Double] = []
+    private var latestHealth: MemoryHealthAssessment?
     private var recentCPUSamples: [Double] = []
 
     private var lastSwapIns: UInt64?
@@ -894,6 +1018,7 @@ final class MenuMeter: NSObject, NSPopoverDelegate {
     private var timer: Timer?
     private var lastCloseTime: TimeInterval = 0
     private var isFetchingProcesses = false
+    private var lastProcessFetch: TimeInterval = -100
 
     override init() {
         super.init()
@@ -1051,8 +1176,10 @@ final class MenuMeter: NSObject, NSPopoverDelegate {
 
     // P0: Fetch Top Processes by distinct PID & app info (solo a popover aperto)
     private func fetchTopProcesses() {
-        guard !isFetchingProcesses else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        guard !isFetchingProcesses, now - lastProcessFetch >= 6 else { return }
         isFetchingProcesses = true
+        lastProcessFetch = now
 
         DispatchQueue.global(qos: .utility).async { [weak self] in
             let task = Process()
@@ -1141,12 +1268,14 @@ final class MenuMeter: NSObject, NSPopoverDelegate {
             let pressName = ram.pressure?.name ?? "Non disponibile"
             lines.append("RAM: \(String(format: "%.1f / %.1f GiB (%.0f%%)", usedGiB, totalGiB, pct)) · Pressione: \(pressName)")
             lines.append("RAM dettaglio: Attiva \(formatBytes(ram.active)) · Cablata \(formatBytes(ram.wired)) · Compressa \(formatBytes(ram.compressed)) · Libera \(formatBytes(ram.free))")
+            if let health = latestHealth {
+                lines.append("Diagnosi (finestra 60s): \(health.status) · \(health.detail)")
+            }
 
-            let swapU = (ram.swapUsed ?? 0) / gib
-            let swapT = (ram.swapTotal ?? 0) / gib
-            let swapRateTotal = ram.swapInRate + ram.swapOutRate
-            let swapRateText = swapRateTotal < kib ? "Inattiva (0 KB/s)" : "Attiva: in \(formatRate(ram.swapInRate)) · out \(formatRate(ram.swapOutRate))"
-            lines.append("Swap: \(String(format: "%.1f / %.1f GiB", swapU, swapT)) · Attività: \(swapRateText)")
+            let swapAmount = ram.swapUsed.map(formatBytes) ?? "Non disponibile"
+            let swapAllocated = ram.swapTotal.map(formatBytes) ?? "Non disponibile"
+            lines.append("Swap su disco: \(swapAmount) · Allocata dinamicamente: \(swapAllocated) (non è un limite massimo fisso)")
+            lines.append("Swap I/O: in \(formatRate(ram.swapInRate)) · out \(formatRate(ram.swapOutRate)) · Picco 60s: \(formatRate(swapHistory.max() ?? 0))")
         }
 
         if !topCPUList.isEmpty {
@@ -1215,6 +1344,12 @@ final class MenuMeter: NSObject, NSPopoverDelegate {
             lastSwapSampleTime = now
 
             let pressure = memoryPressureStatus()
+            pressureHistory.append(pressure?.level ?? 0)
+            swapHistory.append(swapInRate + swapOutRate)
+            if pressureHistory.count > 30 { pressureHistory.removeFirst(pressureHistory.count - 30) }
+            if swapHistory.count > 30 { swapHistory.removeFirst(swapHistory.count - 30) }
+            let health = MemoryHealthAnalyzer.assess(pressureLevels: pressureHistory, swapRates: swapHistory)
+            latestHealth = health
 
             let usedPct = ramData.total == 0 ? 0 : (used / ramData.total) * 100.0
             ramHistory.append(usedPct)
@@ -1248,11 +1383,15 @@ final class MenuMeter: NSObject, NSPopoverDelegate {
                 swapInRate: swapInRate,
                 swapOutRate: swapOutRate,
                 pressure: pressure,
-                history: ramHistory
+                history: ramHistory,
+                pressureHistory: pressureHistory,
+                swapHistory: swapHistory,
+                health: health
             )
 
             let cpuText = cpu.map { String(format: "%.0f%%", $0.total) } ?? "…"
-            status.button?.title = "CPU \(cpuText) · RAM \(String(format: "%.0f%%", usedPct))"
+            let alertGlyph = health.severity == 2 ? " ■" : (health.severity == 1 ? " ▲" : "")
+            status.button?.title = "CPU \(cpuText) · RAM \(String(format: "%.0f%%", usedPct))\(alertGlyph)"
         }
 
         if popover.isShown {
@@ -1265,7 +1404,31 @@ final class MenuMeter: NSObject, NSPopoverDelegate {
     }
 }
 
+#if MENUMETER_TEST
+// Pure-logic smoke tests: no GUI, no permission prompts, no synthetic swap usage.
+let normal = MemoryHealthAnalyzer.assess(pressureLevels: Array(repeating: 1, count: 30), swapRates: Array(repeating: 0, count: 30))
+assert(normal.severity == 0 && normal.status == "Memoria stabile")
+let briefYellow = MemoryHealthAnalyzer.assess(pressureLevels: [1, 1, 2, 2], swapRates: [0, 0, 0, 0])
+assert(briefYellow.severity == 0)
+let yellow = MemoryHealthAnalyzer.assess(pressureLevels: Array(repeating: 2, count: 15), swapRates: Array(repeating: 0, count: 15))
+assert(yellow.severity == 1 && yellow.status.contains("persistente"))
+let red = MemoryHealthAnalyzer.assess(pressureLevels: [4, 4, 4], swapRates: [0, 0, 0])
+assert(red.severity == 2)
+let thrash = MemoryHealthAnalyzer.assess(pressureLevels: Array(repeating: 1, count: 10), swapRates: Array(repeating: 6 * mib, count: 10))
+assert(thrash.severity == 1 && thrash.status == "Swap I/O intensa")
+let briefSwap = MemoryHealthAnalyzer.assess(pressureLevels: [1, 1], swapRates: [6 * mib, 0])
+assert(briefSwap.severity == 0)
+let unknown = MemoryHealthAnalyzer.assess(pressureLevels: [0], swapRates: [0])
+assert(unknown.status == "Pressione non disponibile")
+let unrecognized = MemoryHealthAnalyzer.assess(pressureLevels: [3], swapRates: [0])
+assert(unrecognized.status == "Pressione non disponibile")
+// Occupied-but-idle swap must not trigger an alert: only actual I/O and pressure count.
+let recovered = MemoryHealthAnalyzer.assess(pressureLevels: [2, 2, 2, 1], swapRates: [6 * mib, 6 * mib, 6 * mib, 0])
+assert(recovered.severity == 0)
+print("MenuMeter memory-health tests passed")
+#else
 let app = NSApplication.shared
 app.setActivationPolicy(.accessory)
 let monitor = MenuMeter()
 app.run()
+#endif
