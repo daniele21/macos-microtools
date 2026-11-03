@@ -286,6 +286,35 @@ enum RunnerPulseLocalPolicy {
     }
 }
 
+enum RunnerPulseDiagnostics {
+    static func observerErrorTail(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> String {
+        let url = home.appendingPathComponent("Library/Logs/RunnerPulse/observer.err.log")
+        guard let data = try? Data(contentsOf: url), !data.isEmpty else {
+            return "Nessun errore registrato in observer.err.log (o log non ancora creato)."
+        }
+        // Strictly bounded, local-only diagnostics. Do not show raw worker logs,
+        // since command output might contain credentials or business data.
+        let tail = String(decoding: data.suffix(16 * 1024), as: UTF8.self)
+        return tail.replacingOccurrences(
+            of: "(?i)(github_pat_|ghp_|gho_|ghs_)[A-Za-z0-9_]+",
+            with: "[TOKEN REDATTO]", options: .regularExpression
+        ).split(separator: "\n").suffix(12).joined(separator: "\n")
+    }
+
+    static func eventSummary(_ snapshots: [RunnerPulseLocalSnapshot],
+                             now: Date = Date()) -> [String] {
+        snapshots.flatMap { snap in
+            snap.recent_events.map { event -> (Double, String) in
+                let age = Int(max(0, now.timeIntervalSince1970 - event.time))
+                let origin = event.repository.map { " · \($0)" } ?? ""
+                let description = event.step ?? event.name ?? event.kind
+                return (event.time, "runner-\(snap.runner_id) · \(description)\(origin) · \(age)s fa")
+            }
+        }.sorted { $0.0 > $1.0 }.prefix(15).map { $0.1 }
+    }
+}
+
+
 enum RunnerAPIError: LocalizedError {
     case invalidResponse(Int)
     case api(Int, String)
@@ -681,34 +710,6 @@ enum RunnerPulseBackgroundControl {
     static func logURL() -> URL {
         FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Logs/RunnerPulse/background-runners.err.log")
-    }
-}
-
-enum RunnerPulseDiagnostics {
-    static func observerErrorTail(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> String {
-        let url = home.appendingPathComponent("Library/Logs/RunnerPulse/observer.err.log")
-        guard let data = try? Data(contentsOf: url), !data.isEmpty else {
-            return "Nessun errore registrato in observer.err.log (o log non ancora creato)."
-        }
-        // Strictly bounded, local-only diagnostics. Do not show raw worker logs,
-        // since command output might contain credentials or business data.
-        let tail = String(decoding: data.suffix(16 * 1024), as: UTF8.self)
-        return tail.replacingOccurrences(
-            of: "(?i)(github_pat_|ghp_|gho_|ghs_)[A-Za-z0-9_]+",
-            with: "[TOKEN REDATTO]", options: .regularExpression
-        ).split(separator: "\n").suffix(12).joined(separator: "\n")
-    }
-
-    static func eventSummary(_ snapshots: [RunnerPulseLocalSnapshot],
-                             now: Date = Date()) -> [String] {
-        snapshots.flatMap { snap in
-            snap.recent_events.map { event -> (Double, String) in
-                let age = Int(max(0, now.timeIntervalSince1970 - event.time))
-                let origin = event.repository.map { " · \($0)" } ?? ""
-                let description = event.step ?? event.name ?? event.kind
-                return (event.time, "runner-\(snap.runner_id) · \(description)\(origin) · \(age)s fa")
-            }
-        }.sorted { $0.0 > $1.0 }.prefix(15).map { $0.1 }
     }
 }
 
