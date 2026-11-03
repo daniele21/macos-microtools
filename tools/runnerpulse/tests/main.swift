@@ -68,6 +68,27 @@ check(local.runner_id == 2 && local.job?.repository == "daniele21/source-repo", 
 check(local.job?.current_step == "Validate frozen source", "local step")
 check(local.isFresh(now: Date(timeIntervalSince1970: 1003.0)), "local live heartbeat")
 check(!local.isFresh(now: Date(timeIntervalSince1970: 1010.0)), "stale is not online")
+// An existing JSON file is not sufficient evidence of a live observer.
+let freshAt1003 = Date(timeIntervalSince1970: 1003.0)
+let staleAt1010 = Date(timeIntervalSince1970: 1010.0)
+check(RunnerPulseLocalPolicy.hasFreshTelemetry([local], at: freshAt1003),
+      "live telemetry when fresh")
+check(!RunnerPulseLocalPolicy.hasFreshTelemetry([local], at: staleAt1010),
+      "expired heartbeat must not select local dashboard")
+check(!RunnerPulseLocalPolicy.hasFreshTelemetry([], at: freshAt1003),
+      "missing local JSON is not live telemetry")
+check(RunnerPulseLocalPolicy.shouldRefreshRemote(
+    previousFresh: true, currentFresh: false, remoteConfigured: true),
+      "immediate GitHub refresh when last local heartbeat expires")
+check(!RunnerPulseLocalPolicy.shouldRefreshRemote(
+    previousFresh: true, currentFresh: false, remoteConfigured: false),
+      "no GitHub refresh without credentials")
+check(!RunnerPulseLocalPolicy.shouldRefreshRemote(
+    previousFresh: false, currentFresh: false, remoteConfigured: true),
+      "avoid repeated remote refresh on every stale poll")
+check(!RunnerPulseLocalPolicy.shouldRefreshRemote(
+    previousFresh: true, currentFresh: true, remoteConfigured: true),
+      "no fallback during healthy local telemetry")
 check(local.recent_events.count == 1, "local event decode")
 
 check(local.resources == nil, "older snapshots without metrics remain readable")
