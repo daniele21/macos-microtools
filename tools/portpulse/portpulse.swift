@@ -176,6 +176,14 @@ private final class PortPulseFlippedView: NSView {
     override var isFlipped: Bool { true }
 }
 
+private final class PortPulseRootView: NSVisualEffectView {
+    var appearanceDidChange: (() -> Void)?
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        appearanceDidChange?()
+    }
+}
+
 // Resolve semantic colors after the view joins its actual window appearance,
 // rather than capturing light-mode CGColors while constructing the popover.
 private final class PortPulseSurfaceView: NSView {
@@ -242,13 +250,12 @@ final class PortPulseViewController: NSViewController {
     private var latestEvent: PortListener?
     private var hasLoaded = false
 
-    override func viewDidChangeEffectiveAppearance() {
-        super.viewDidChangeEffectiveAppearance()
-        if hasLoaded { rebuild() }
-    }
-
     override func loadView() {
-        let root = NSVisualEffectView(frame: NSRect(x: 0, y: 0, width: 426, height: 590))
+        let root = PortPulseRootView(frame: NSRect(x: 0, y: 0, width: 426, height: 590))
+        root.appearanceDidChange = { [weak self] in
+            guard let self, self.hasLoaded else { return }
+            self.rebuild()
+        }
         root.material = .popover
         root.blendingMode = .behindWindow
         root.state = .active
