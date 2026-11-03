@@ -1,0 +1,23 @@
+name: PortPulse macOS validation
+on:
+  pull_request:
+    paths:
+      - 'tools/portpulse/**'
+      - 'Makefile'
+      - '.github/workflows/portpulse.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'tools/portpulse/**'
+      - 'Makefile'
+      - '.github/workflows/portpulse.yml'
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Native build, unit tests, bundle metadata and login smoke
+        run: make test-portpulse
