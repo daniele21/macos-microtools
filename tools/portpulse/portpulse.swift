@@ -130,6 +130,10 @@ enum PortScanner {
     }
 }
 
+private final class PortPulseFlippedView: NSView {
+    override var isFlipped: Bool { true }
+}
+
 final class PortPulseViewController: NSViewController {
     var onRefresh: (() -> Void)?
     var onQuit: (() -> Void)?
@@ -175,7 +179,7 @@ final class PortPulseViewController: NSViewController {
         scroll.hasVerticalScroller = true
         scroll.drawsBackground = false
         scroll.borderType = .noBorder
-        let document = NSView()
+        let document = PortPulseFlippedView()
         document.translatesAutoresizingMaskIntoConstraints = false
         document.addSubview(rows)
         scroll.documentView = document
@@ -237,7 +241,7 @@ final class PortPulseViewController: NSViewController {
     private func rebuild() {
         let networkCount = listeners.filter { $0.scope == .network }.count
         let localCount = listeners.count - networkCount
-        summaryField.stringValue = lastError ?? "\(listeners.count) listener · \(localCount) locali · \(networkCount) non locali"
+        summaryField.stringValue = lastError ?? "\(Set(listeners.map(\.port)).count) porte · \(localCount) locali · \(networkCount) non locali"
         summaryField.textColor = lastError == nil ? .secondaryLabelColor : .systemRed
         eventField.stringValue = lastEvent ?? ""
         eventField.isHidden = lastEvent == nil
@@ -387,7 +391,7 @@ final class PortPulseApp: NSObject, NSApplicationDelegate {
                     self.listeners = found
                     let added = self.diff.newNetworkListeners(found)
                     self.controller.render(found, newExposures: added, error: nil)
-                    self.statusItem.button?.title = " \(found.count)"
+                    self.statusItem.button?.title = " \(Set(found.map(\.port)).count)"
                     self.statusItem.button?.contentTintColor =
                         found.contains(where: { $0.scope == .network }) ? .systemOrange : nil
                     self.statusItem.button?.toolTip =
@@ -435,7 +439,18 @@ final class PortPulseApp: NSObject, NSApplicationDelegate {
 struct PortPulseMain {
     static func main() {
         if CommandLine.arguments.contains("--help") {
-            print("PortPulse: native macOS TCP listener menu-bar monitor.")
+            print("PortPulse: native macOS TCP listener menu-bar monitor. Usage: PortPulse [--help|--list].")
+            return
+        }
+        if CommandLine.arguments.contains("--list") {
+            do {
+                for item in try PortScanner.scan() {
+                    print("\(item.port)\t\(item.command)\tPID \(item.pid)\t\(item.address)")
+                }
+            } catch {
+                fputs("PortPulse scan failed: \(error.localizedDescription)\n", stderr)
+                exit(EXIT_FAILURE)
+            }
             return
         }
         let app = NSApplication.shared
