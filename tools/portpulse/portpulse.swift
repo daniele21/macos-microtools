@@ -610,6 +610,12 @@ final class PortPulseViewController: NSViewController {
         return button
     }
 
+    // Used only by the CLI visual smoke harness. Does not run on app startup.
+    func preview(_ items: [PortListener], expanded item: PortListener) {
+        selectedID = item.identifier
+        render(items, newExposures: [], error: nil)
+    }
+
     @objc private func filtersChanged() { rebuild(resetScroll: true) }
 
     @objc private func rowClicked(_ sender: NSButton) {
@@ -775,6 +781,59 @@ struct PortPulseMain {
                 fputs("PortPulse scan failed: \(error.localizedDescription)\n", stderr)
                 exit(EXIT_FAILURE)
             }
+            return
+        }
+        if let index = CommandLine.arguments.firstIndex(of: "--ui-snapshot") {
+            guard CommandLine.arguments.indices.contains(index + 1) else {
+                fputs("Usage: PortPulse --ui-snapshot /path/to/output.png\n", stderr)
+                exit(EXIT_FAILURE)
+            }
+            let destination = URL(fileURLWithPath: CommandLine.arguments[index + 1])
+            let app = NSApplication.shared
+            app.setActivationPolicy(.prohibited)
+            let controller = PortPulseViewController()
+            let frame = NSRect(x: 0, y: 0, width: 426, height: 590)
+            let window = NSWindow(contentRect: frame, styleMask: .borderless,
+                                  backing: .buffered, defer: false)
+            window.appearance = NSAppearance(named: .darkAqua)
+            window.contentViewController = controller
+            window.orderFrontRegardless()
+            let local: [PortListener] = [
+                PortListener(pid: 69214, command: "node", uid: 501, host: "::1", port: 4000),
+                PortListener(pid: 71597, command: "postgres", uid: 501, host: "127.0.0.1", port: 5432),
+                PortListener(pid: 2375, command: "Google Drive", uid: 501, host: "::1", port: 7679),
+                PortListener(pid: 702, command: "Spotify", uid: 501, host: "127.0.0.1", port: 7768),
+                PortListener(pid: 28895, command: "llama-server", uid: 501, host: "127.0.0.1", port: 8091)
+            ] + (0..<30).map {
+                PortListener(pid: Int32(9000 + $0), command: "Dev service", uid: 501,
+                             host: "127.0.0.1", port: 10000 + $0)
+            }
+            let network: [PortListener] = [
+                PortListener(pid: 714, command: "ControlCenter", uid: 0, host: "*", port: 5000),
+                PortListener(pid: 714, command: "ControlCenter", uid: 0, host: "*", port: 7000),
+                PortListener(pid: 2000, command: "python", uid: 501, host: "0.0.0.0", port: 8000),
+                PortListener(pid: 2001, command: "node", uid: 501, host: "::", port: 8080)
+            ]
+            let ordered = (local + network).sorted { $0.port < $1.port }
+            controller.preview(ordered, expanded: network[0])
+            window.contentView?.layoutSubtreeIfNeeded()
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
+            let bounds = controller.view.bounds
+            guard let bitmap = controller.view.bitmapImageRepForCachingDisplay(in: bounds) else {
+                fputs("PortPulse snapshot bitmap allocation failed.\n", stderr)
+                exit(EXIT_FAILURE)
+            }
+            controller.view.cacheDisplay(in: bounds, to: bitmap)
+            guard let png = bitmap.representation(using: .png, properties: [:]) else {
+                fputs("PortPulse snapshot encoding failed.\n", stderr)
+                exit(EXIT_FAILURE)
+            }
+            do { try png.write(to: destination) }
+            catch {
+                fputs("PortPulse snapshot write failed: \(error.localizedDescription)\n", stderr)
+                exit(EXIT_FAILURE)
+            }
+            print("PortPulse UI screenshot written to \(destination.path)")
             return
         }
         let app = NSApplication.shared
