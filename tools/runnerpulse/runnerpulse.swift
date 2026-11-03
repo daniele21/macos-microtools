@@ -610,26 +610,105 @@ enum RunnerPulseBackgroundControl {
         return "Avvio richiesto. La connessione e i controlli preflight possono richiedere qualche secondo."
     }
 
-    // Reboot only the passive read-only observer, NEVER the Actions runners.
-    static func restartObserver() throws -> String {
-        let service = "gui/\(getuid())/com.daniele.runnerpulse.observer"
-        guard let status = try? runLaunchctl(["print", service]), status.0 == 0 else {
-            throw NSError(domain: "RunnerPulse", code: 8,
-                          userInfo: [NSLocalizedDescriptionKey:
-                            "Observer non installato. Da ~/Projects/macos-microtools esegui: make install-runnerpulse-observer"])
+    // Install/recover only the read-only observer. Actions runners are not touched.
+    static func repairObserver() throws -> String {
+        let fm = FileManager.default
+        let home = fm.homeDirectoryForCurrentUser
+        let label = "com.daniele.runnerpulse.observer"
+        let service = "gui/\(getuid())/\(label)"
+        if let check = try? runLaunchctl(["print", service]), check.0 == 0 {
+            let result = try runLaunchctl(["kickstart", "-k", service])
+            guard result.0 == 0 else {
+                throw NSError(domain: "RunnerPulse", code: 9, userInfo: [
+                    NSLocalizedDescriptionKey: "Riavvio observer: \(result.1.trimmingCharacters(in: .whitespacesAndNewlines))"
+                ])
+            }
+            return "Observer riavviato; runner GitHub Actions invariati."
         }
-        let result = try runLaunchctl(["kickstart", "-k", service])
+
+        let candidates = ["Projects/local-runner-infra", "Personal/local-runner-infra"]
+            .map { home.appendingPathComponent($0, isDirectory: true) }
+        guard let infra = candidates.first(where: {
+            fm.fileExists(atPath: $0.appendingPathComponent("scripts/runnerpulse_observer.py").path) &&
+            fm.fileExists(atPath: $0.appendingPathComponent("scripts/runner_monitor/status.py").path)
+        }) else {
+            throw NSError(domain: "RunnerPulse", code: 8, userInfo: [
+                NSLocalizedDescriptionKey:
+                    "Sorgente observer non trovata in ~/Projects/local-runner-infra o ~/Personal/local-runner-infra. Aggiorna local-runner-infra prima di riprovare."
+            ])
+        }
+        guard let python = pythonExecutable() else {
+            throw NSError(domain: "RunnerPulse", code: 10, userInfo: [
+                NSLocalizedDescriptionKey: "Python 3 non disponibile."
+            ])
+        }
+        let agents = home.appendingPathComponent("Library/LaunchAgents", isDirectory: true)
+        let logs = home.appendingPathComponent("Library/Logs/RunnerPulse", isDirectory: true)
+        try fm.createDirectory(at: agents, withIntermediateDirectories: true)
+        try fm.createDirectory(at: logs, withIntermediateDirectories: true)
+        let observer = infra.appendingPathComponent("scripts/runnerpulse_observer.py")
+        let plist = agents.appendingPathComponent("\(label).plist")
+        let contents: [String: Any] = [
+            "Label": label,
+            "ProgramArguments": [python, observer.path, "--interval", "1"],
+            "WorkingDirectory": infra.path,
+            "EnvironmentVariables": [
+                "HOME": home.path,
+                "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+                "PYTHONUNBUFFERED": "1"
+            ],
+            "RunAtLoad": true,
+            "KeepAlive": true,
+            "ThrottleInterval": 20,
+            "ProcessType": "Background",
+            "LimitLoadToSessionType": "Aqua",
+            "StandardOutPath": logs.appendingPathComponent("observer.log").path,
+            "StandardErrorPath": logs.appendingPathComponent("observer.err.log").path
+        ]
+        let data = try PropertyListSerialization.data(fromPropertyList: contents,
+                                                      format: .xml, options: 0)
+        try data.write(to: plist, options: .atomic)
+        try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: plist.path)
+        let result = try runLaunchctl(["bootstrap", "gui/\(getuid())", plist.path])
         guard result.0 == 0 else {
-            throw NSError(domain: "RunnerPulse", code: 9,
-                          userInfo: [NSLocalizedDescriptionKey:
-                            "Impossibile riavviare l'observer: \(result.1.trimmingCharacters(in: .whitespacesAndNewlines))"])
+            throw NSError(domain: "RunnerPulse", code: 11, userInfo: [
+                NSLocalizedDescriptionKey: "Installazione observer (launchd): \(result.1.trimmingCharacters(in: .whitespacesAndNewlines))"
+            ])
         }
-        return "Observer riavviato. Nessun runner CI è stato interrotto."
+        return "Observer installato e avviato. I runner CI non sono stati riavviati."
     }
 
     static func logURL() -> URL {
         FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Logs/RunnerPulse/background-runners.err.log")
+    }
+}
+
+enum RunnerPulseDiagnostics {
+    static func observerErrorTail(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> String {
+        let url = home.appendingPathComponent("Library/Logs/RunnerPulse/observer.err.log")
+        guard let data = try? Data(contentsOf: url), !data.isEmpty else {
+            return "Nessun errore registrato in observer.err.log (o log non ancora creato)."
+        }
+        // Strictly bounded, local-only diagnostics. Do not show raw worker logs,
+        // since command output might contain credentials or business data.
+        let tail = String(decoding: data.suffix(16 * 1024), as: UTF8.self)
+        return tail.replacingOccurrences(
+            of: "(?i)(github_pat_|ghp_|gho_|ghs_)[A-Za-z0-9_]+",
+            with: "[TOKEN REDATTO]", options: .regularExpression
+        ).split(separator: "\n").suffix(12).joined(separator: "\n")
+    }
+
+    static func eventSummary(_ snapshots: [RunnerPulseLocalSnapshot],
+                             now: Date = Date()) -> [String] {
+        snapshots.flatMap { snap in
+            snap.recent_events.map { event -> (Double, String) in
+                let age = Int(max(0, now.timeIntervalSince1970 - event.time))
+                let origin = event.repository.map { " · \($0)" } ?? ""
+                let description = event.step ?? event.name ?? event.kind
+                return (event.time, "runner-\(snap.runner_id) · \(description)\(origin) · \(age)s fa")
+            }
+        }.sorted { $0.0 > $1.0 }.prefix(15).map { $0.1 }
     }
 }
 
@@ -649,6 +728,8 @@ final class RunnerPulseState: ObservableObject {
     @Published var runnerControlMessage: String?
     @Published var restartingObserver = false
     @Published var observerMessage: String?
+    @Published var showDiagnostics = false
+    @Published var observerErrorLog = ""
     private var localTimer: Timer?
     private var lastLocalPollWasFresh = false
     private var token: String?
@@ -747,7 +828,7 @@ final class RunnerPulseState: ObservableObject {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let message: String
             do {
-                message = try RunnerPulseBackgroundControl.restartObserver()
+                message = try RunnerPulseBackgroundControl.repairObserver()
             } catch {
                 message = "Observer non riavviato: \(error.localizedDescription)"
             }
@@ -757,6 +838,16 @@ final class RunnerPulseState: ObservableObject {
                 self?.pollLocal()
             }
         }
+    }
+
+    func openDiagnostics() {
+        observerErrorLog = RunnerPulseDiagnostics.observerErrorTail()
+        showDiagnostics = true
+    }
+
+    func reloadDiagnostics() {
+        observerErrorLog = RunnerPulseDiagnostics.observerErrorTail()
+        pollLocal()
     }
 
     func openBackgroundLog() {
@@ -1243,6 +1334,8 @@ private struct RunnerPulsePanel: View {
                 if state.refreshing { ProgressView().controlSize(.small).scaleEffect(0.7) }
                 Button { state.refresh(force: true) } label: { Image(systemName: "arrow.clockwise") }
                     .buttonStyle(.plain).help("Aggiorna")
+                Button { state.openDiagnostics() } label: { Image(systemName: "text.alignleft") }
+                    .buttonStyle(.plain).help("Log e diagnostica")
                 Button { state.showSettings = true } label: { Image(systemName: "gearshape") }
                     .buttonStyle(.plain).help("Impostazioni")
             }
@@ -1269,7 +1362,7 @@ private struct RunnerPulsePanel: View {
                         Button {
                             state.restartObserver()
                         } label: {
-                            Label(state.restartingObserver ? "Riavvio observer…" : "Riavvia observer",
+                            Label(state.restartingObserver ? "Ripristino observer…" : "Ripristina observer",
                                   systemImage: "arrow.clockwise")
                         }
                         .disabled(state.restartingObserver)
@@ -1293,7 +1386,8 @@ private struct RunnerPulsePanel: View {
             }
             // Stale telemetry means we cannot establish whether workers are
             // already busy. Never encourage starting another runner session.
-            if !state.hasLiveLocalSession && !state.hasStaleLocalTelemetry {
+            if state.localSnapshots.count == 4 &&
+               state.localSnapshots.allSatisfy({ $0.isFresh() && $0.status == "stopped" }) {
                 VStack(alignment: .leading, spacing: 7) {
                     HStack {
                         Button {
@@ -1308,7 +1402,7 @@ private struct RunnerPulsePanel: View {
                         Button("Log avvio") { state.openBackgroundLog() }
                             .font(.system(size: 10))
                     }
-                    Text("I runner saranno gestiti da launchd, senza finestra Terminale. Non usa --force e non duplica una sessione attiva.")
+                    Text("Avvia solo se i quattro runner sono verificati come fermati. Non usa --force e non crea sessioni duplicate.")
                         .font(.system(size: 10)).foregroundStyle(.secondary)
                     if let message = state.runnerControlMessage {
                         Text(message)
@@ -1326,7 +1420,7 @@ private struct RunnerPulsePanel: View {
             } else if !state.configured {
                 VStack(alignment: .leading, spacing: 12) {
                     Label("Monitor locale", systemImage: "desktopcomputer").font(.headline)
-                    Text("Nessuna telemetria locale ricevuta. Premi Avvia runner in background per avviare i worker senza Terminale, oppure controlla il log di avvio.")
+                    Text("Nessuna telemetria locale ricevuta. Usa Ripristina observer: installa o riavvia soltanto il lettore passivo, senza toccare i worker CI.")
                         .font(.system(size: 12)).foregroundStyle(.secondary)
                     Text("La dashboard leggerà automaticamente i runner senza richiedere un token GitHub.")
                         .font(.system(size: 11)).foregroundStyle(.secondary)
@@ -1426,6 +1520,9 @@ private struct RunnerPulsePanel: View {
         .sheet(isPresented: $state.showSettings) {
             RunnerPulseSettings(state: state)
         }
+        .sheet(isPresented: $state.showDiagnostics) {
+            RunnerPulseDiagnosticsView(state: state)
+        }
     }
 
     private func sectionHeader(_ title: String, count: Int) -> some View {
@@ -1440,6 +1537,60 @@ private struct RunnerPulsePanel: View {
     private func infoText(_ text: String) -> some View {
         Text(text).font(.system(size: 11)).foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+private struct RunnerPulseDiagnosticsView: View {
+    @ObservedObject var state: RunnerPulseState
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Label("Log e diagnostica", systemImage: "text.alignleft").font(.headline)
+                Spacer()
+                Button("Aggiorna") { state.reloadDiagnostics() }
+                Button("Chiudi") { state.showDiagnostics = false }
+            }
+            Text("Fonte: \(state.hasLocalTelemetry ? "telemetria locale live" : state.configured ? "GitHub remoto / locale indisponibile" : "telemetria locale indisponibile")")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+            ForEach(1...4, id: \.self) { id in
+                let item = state.localSnapshots.first { $0.runner_id == id }
+                let age = item.map { Int(max(0, Date().timeIntervalSince1970 - $0.updated_at)) }
+                Text("runner-\(id): \(item?.isFresh() == true ? (item?.status ?? "sconosciuto") : "NON OSSERVATO") · heartbeat \(age.map { "\($0)s" } ?? "assente")")
+                    .font(.system(size: 10, design: .monospaced))
+            }
+            Divider()
+            Text("EVENTI RECENTI (METADATI)").font(.system(size: 10, weight: .semibold))
+            let events = RunnerPulseDiagnostics.eventSummary(state.localSnapshots)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 5) {
+                    ForEach(events, id: \.self) { item in
+                        Text(item).font(.system(size: 10, design: .monospaced))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    if events.isEmpty {
+                        Text("Nessun evento locale disponibile.").font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .frame(height: 115)
+            Divider()
+            Text("ERRORI OBSERVER (ULTIME 12 RIGHE)").font(.system(size: 10, weight: .semibold))
+            ScrollView {
+                Text(state.observerErrorLog)
+                    .font(.system(size: 10, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(height: 100)
+            Text("Non mostra output raw dei job o credenziali. Per il log completo usa Apri run GitHub dalla scheda del job.")
+                .font(.system(size: 10))
+                .foregroundStyle(.secondary)
+        }
+        .padding(16)
+        .frame(width: 430)
     }
 }
 
