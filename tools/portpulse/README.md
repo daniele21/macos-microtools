@@ -1,0 +1,62 @@
+# PortPulse
+
+Small native, **menu-bar-only** TCP listening-port monitor for macOS 13+.
+No Dock icon, cloud connection, root helper, third-party packages or telemetry.
+Lives alongside MenuMeter, RunnerPulse and DisplayPulse.
+
+## Quick start
+
+~~~sh
+make test-portpulse
+make install-portpulse
+open "$HOME/.local/opt/PortPulse.app"
+make enable-portpulse-login
+~~~
+
+The opt-in login command installs a per-user LaunchAgent to open the app at login.
+Check with **make status-portpulse-login** or disable with **make disable-portpulse-login**.
+Rebuild/restart with **make refresh-portpulse**. Uninstall with **make uninstall-portpulse**.
+
+## Menu bar
+
+The **network symbol + listener count** is visible while the app is running.
+Open the popover for TCP listeners with port, command, PID, bind address and UID,
+plus instant search and localhost/network filters. Select a row to copy diagnostics
+or request a controlled shutdown. Scans run on a background queue every five seconds.
+
+An orange icon means at least one **non-loopback listener**. This is **not** proof
+of exposure to the Internet: firewall, NAT, routing and authentication determine
+actual reachability. The first scan establishes a baseline; newly observed
+non-local listeners are highlighted in the popover. No OS notification permission
+is requested.
+
+The monitor calls **/usr/sbin/lsof -nP -iTCP -sTCP:LISTEN -Fpcun**.
+This deliberately covers TCP listeners, not UDP or a firewall rules manager.
+Process visibility may be incomplete without privileges; an empty list does not
+prove the system has no listeners.
+
+## Safe stop behavior
+
+Select an entry and click **Arresta…**. Only entries with a verified UID matching
+the current user and a PID other than 1 or PortPulse itself are eligible.
+A confirmation alert names the exact process and address.
+Before acting, PortPulse rescans and checks the same PID, command, UID, address,
+and port are still present, then sends **SIGTERM** directly via kill(2).
+No shell, sudo or automatic SIGKILL is involved. A very small PID-recycling
+race can still exist between final verification and kill(2).
+Processes supervised by launchd may restart automatically.
+
+## Testing
+
+~~~sh
+make test-portpulse
+plutil -lint bin/PortPulse.app/Contents/Info.plist
+~~~
+
+The GitHub Actions workflow compiles on macOS and runs the parser, exposure
+classification, safe-stop eligibility and new-listener detection tests.
+
+## Troubleshooting
+
+If lsof fails, the menu bar shows **!** rather than a misleading zero.
+Compare with: **lsof -nP -iTCP -sTCP:LISTEN** from Terminal.
