@@ -75,6 +75,13 @@ check(RunnerPulseLocalPolicy.hasFreshTelemetry([local], at: freshAt1003),
       "live telemetry when fresh")
 check(!RunnerPulseLocalPolicy.hasFreshTelemetry([local], at: staleAt1010),
       "expired heartbeat must not select local dashboard")
+let refreshedJSON = try JSONDecoder().decode(RunnerPulseLocalSnapshot.self, from: Data(
+    String(decoding: localJSON, as: UTF8.self).replacingOccurrences(
+        of: "\"updated_at\": 1000.0", with: "\"updated_at\": 1008.0"
+    ).utf8
+))
+check(RunnerPulseLocalPolicy.hasFreshTelemetry([local, refreshedJSON], at: staleAt1010),
+      "one fresh runner keeps mixed local dashboard live")
 check(!RunnerPulseLocalPolicy.hasFreshTelemetry([], at: freshAt1003),
       "missing local JSON is not live telemetry")
 check(RunnerPulseLocalPolicy.shouldRefreshRemote(
