@@ -56,6 +56,19 @@ struct PortPulseTests {
         expect(!PortPulseCore.canTerminate(root, currentUID: 501, ownPID: 999), "cannot stop another user")
         let unknown = PortListener(pid: 32, command: "unknown", uid: nil, host: "*", port: 8888)
         expect(!PortPulseCore.canTerminate(unknown, currentUID: 501, ownPID: 999), "unknown owner cannot stop")
+        let summary = PortPulseSummary(results)
+        expect(summary.total == 3, "port total deduplicates multiple addresses")
+        expect(summary.network == 2, "network count deduplicates dual-stack wildcard binds")
+        expect(summary.local == 1, "network scope takes precedence on shared port")
+        expect(summary.total == summary.local + summary.network, "summary segments sum to total")
+        expect(PortPulseCore.matches(own, filter: 0, search: "123"), "search matches PID")
+        expect(PortPulseCore.matches(own, filter: 1, search: "node"), "local filtered search")
+        expect(!PortPulseCore.matches(own, filter: 2, search: "node"), "network filter excludes loopback")
+        expect(PortPulseCore.matches(root, filter: 2, search: "::"), "network matches IPv6 host")
+        expect(PortPulseCore.likelyHTTPURL(for: own)?.absoluteString == "http://127.0.0.1:3000",
+               "browser link targets only loopback for likely web servers")
+        expect(PortPulseCore.likelyHTTPURL(for: root) == nil,
+               "system services do not get speculative browser link")
         var diff = PortPulseDiff()
         expect(diff.newNetworkListeners(results).isEmpty, "first scan establishes baseline")
         expect(diff.newNetworkListeners(results).isEmpty, "steady state does not alert")
@@ -64,6 +77,6 @@ struct PortPulseTests {
         expect(diff.newNetworkListeners(results + [added]).isEmpty, "no repeated alert")
         expect(diff.newNetworkListeners(results).isEmpty, "removal not an alert")
         expect(diff.newNetworkListeners(results + [added]) == [added], "reopened network listener alerts")
-        print("PortPulse parser, scope, safety and diff tests passed.")
+        print("PortPulse parser, metrics, filters, HTTP hint, safety and diff tests passed.")
     }
 }
