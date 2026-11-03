@@ -247,6 +247,9 @@ final class PortPulseViewController: NSViewController {
         filter.action = #selector(filtersChanged)
         filter.toolTip = "Rete: binding non-loopback, non necessariamente accessibili da Internet"
         filter.heightAnchor.constraint(equalToConstant: 27).isActive = true
+        // NSSegmentedControl otherwise keeps its natural ~135pt width.
+        for index in 0..<3 { filter.setWidth(398.0 / 3.0, forSegment: index) }
+        filter.widthAnchor.constraint(equalToConstant: 398).isActive = true
 
         search.placeholderString = "Cerca porta, processo, PID"
         search.controlSize = .regular
@@ -277,7 +280,13 @@ final class PortPulseViewController: NSViewController {
         document.addSubview(rows)
         scroll.documentView = document
         NSLayoutConstraint.activate([
-            document.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor),
+            // NSScrollView manages its document frame and may disregard a
+            // clip-view-relative intrinsic width in an unconstrained stack.
+            // This menu popover has a fixed 426pt width and 14pt side margins.
+            // Pin document and rows to the exact content width to prevent
+            // narrow right-aligned listener cards.
+            document.widthAnchor.constraint(equalToConstant: 398),
+            rows.widthAnchor.constraint(equalToConstant: 398),
             rows.leadingAnchor.constraint(equalTo: document.leadingAnchor),
             rows.trailingAnchor.constraint(equalTo: document.trailingAnchor),
             rows.topAnchor.constraint(equalTo: document.topAnchor),
@@ -496,7 +505,7 @@ final class PortPulseViewController: NSViewController {
         let selected = item.identifier == selectedID
         let tint: NSColor = item.scope == .local ? PortPulsePalette.green : PortPulsePalette.orange
         let card = surface(
-            fill: NSColor.controlBackgroundColor.withAlphaComponent(selected ? 0.62 : 0.37),
+            fill: NSColor.windowBackgroundColor.withAlphaComponent(selected ? 0.90 : 0.72),
             stroke: selected ? tint.withAlphaComponent(0.62) : .separatorColor.withAlphaComponent(0.14),
             radius: 11
         )
