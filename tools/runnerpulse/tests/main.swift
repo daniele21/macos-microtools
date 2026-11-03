@@ -97,6 +97,9 @@ check(!RunnerPulseLocalPolicy.shouldRefreshRemote(
     previousFresh: true, currentFresh: true, remoteConfigured: true),
       "no fallback during healthy local telemetry")
 check(local.recent_events.count == 1, "local event decode")
+check(RunnerPulseDiagnostics.eventSummary([local],
+      now: Date(timeIntervalSince1970: 1003)).count == 1,
+      "show metadata events even when observation is no longer live")
 
 check(local.resources == nil, "older snapshots without metrics remain readable")
 
@@ -175,5 +178,12 @@ let invalid = Data(#"{"schema_version":5,"runner_id":1,"session_id":"x","pid":1,
 try invalid.write(to: dir.appendingPathComponent("runner-1.json"))
 check(RunnerPulseLocalReader.load(from: dir).count == 1, "reject unsupported schema")
 
+let logDir = dir.appendingPathComponent("Library/Logs/RunnerPulse")
+try FileManager.default.createDirectory(at: logDir, withIntermediateDirectories: true)
+try Data("Observer error: github_pat_ABC123123 must be hidden\n".utf8)
+    .write(to: logDir.appendingPathComponent("observer.err.log"))
+let sanitized = RunnerPulseDiagnostics.observerErrorTail(home: dir)
+check(!sanitized.contains("ABC123123"), "never display GitHub tokens from observer logs")
+check(sanitized.contains("[TOKEN REDATTO]"), "redact potential GitHub token values")
 try? FileManager.default.removeItem(at: dir)
 print("RunnerPulse model checks passed")
