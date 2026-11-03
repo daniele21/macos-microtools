@@ -54,6 +54,20 @@ Observer logs:
 
 ### When the menu bar stops updating
 
+**One-click recovery (new):** open RunnerPulse and select **Ripristina observer**
+if the local heartbeat is missing or stale. Unlike the older **Riavvia observer**
+button, this action installs and registers the passive `launchd` observer when it
+is absent, using the observer script from `~/Projects/local-runner-infra` or
+`~/Personal/local-runner-infra`. If already registered, only the observer
+process is restarted. It never stops, force-restarts or replaces a GitHub
+Actions runner. If the script is missing, update `local-runner-infra` first.
+
+Use the new **Log e diagnostica** icon in the header to inspect per-runner
+heartbeat age, up to 15 recent sanitized metadata events, and the last 12 lines
+from `observer.err.log`. This is not the raw Actions job stdout/stderr, which
+can contain secrets; click the run link to inspect those GitHub-hosted logs.
+RunnerPulse should keep running in the menubar while these diagnostics are open.
+
 RunnerPulse only considers a local JSON heartbeat live for 6 seconds. Older
 snapshots may remain on disk, but they **no longer hold the UI in local mode**.
 If you configured a GitHub token and monitored repositories, it falls back to
