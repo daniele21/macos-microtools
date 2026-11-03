@@ -273,6 +273,19 @@ enum RunnerPulseLocalReader {
     }
 }
 
+// Never treat previously written JSON as proof of a live telemetry session.
+enum RunnerPulseLocalPolicy {
+    static func hasFreshTelemetry(_ snapshots: [RunnerPulseLocalSnapshot],
+                                  at now: Date = Date()) -> Bool {
+        snapshots.contains { $0.isFresh(now: now) }
+    }
+
+    static func shouldRefreshRemote(previousFresh: Bool, currentFresh: Bool,
+                                    remoteConfigured: Bool) -> Bool {
+        remoteConfigured && previousFresh && !currentFresh
+    }
+}
+
 enum RunnerAPIError: LocalizedError {
     case invalidResponse(Int)
     case api(Int, String)
@@ -597,6 +610,23 @@ enum RunnerPulseBackgroundControl {
         return "Avvio richiesto. La connessione e i controlli preflight possono richiedere qualche secondo."
     }
 
+    // Reboot only the passive read-only observer, NEVER the Actions runners.
+    static func restartObserver() throws -> String {
+        let service = "gui/\(getuid())/com.daniele.runnerpulse.observer"
+        guard let status = try? runLaunchctl(["print", service]), status.0 == 0 else {
+            throw NSError(domain: "RunnerPulse", code: 8,
+                          userInfo: [NSLocalizedDescriptionKey:
+                            "Observer non installato. Da ~/Projects/macos-microtools esegui: make install-runnerpulse-observer"])
+        }
+        let result = try runLaunchctl(["kickstart", "-k", service])
+        guard result.0 == 0 else {
+            throw NSError(domain: "RunnerPulse", code: 9,
+                          userInfo: [NSLocalizedDescriptionKey:
+                            "Impossibile riavviare l'observer: \(result.1.trimmingCharacters(in: .whitespacesAndNewlines))"])
+        }
+        return "Observer riavviato. Nessun runner CI è stato interrotto."
+    }
+
     static func logURL() -> URL {
         FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Logs/RunnerPulse/background-runners.err.log")
@@ -617,7 +647,10 @@ final class RunnerPulseState: ObservableObject {
     @Published var localSnapshots: [RunnerPulseLocalSnapshot] = []
     @Published var launchingRunners = false
     @Published var runnerControlMessage: String?
+    @Published var restartingObserver = false
+    @Published var observerMessage: String?
     private var localTimer: Timer?
+    private var lastLocalPollWasFresh = false
     private var token: String?
     private var lastRequest: Date?
     private var generation = 0
@@ -674,7 +707,16 @@ final class RunnerPulseState: ObservableObject {
         showSettings = true
     }
 
-    var hasLocalTelemetry: Bool { !localSnapshots.isEmpty }
+    var hasLocalTelemetry: Bool {
+        RunnerPulseLocalPolicy.hasFreshTelemetry(localSnapshots)
+    }
+    var hasStaleLocalTelemetry: Bool {
+        !localSnapshots.isEmpty && !hasLocalTelemetry
+    }
+    var latestLocalHeartbeatAge: TimeInterval? {
+        guard let newest = localSnapshots.map(\.updated_at).max() else { return nil }
+        return max(0, Date().timeIntervalSince1970 - newest)
+    }
     var hasLiveLocalSession: Bool {
         localSnapshots.contains(where: { $0.isFresh() && ["starting", "running", "idle"].contains($0.status) })
     }
@@ -698,6 +740,25 @@ final class RunnerPulseState: ObservableObject {
         }
     }
 
+    func restartObserver() {
+        guard !restartingObserver else { return }
+        restartingObserver = true
+        observerMessage = nil
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let message: String
+            do {
+                message = try RunnerPulseBackgroundControl.restartObserver()
+            } catch {
+                message = "Observer non riavviato: \(error.localizedDescription)"
+            }
+            DispatchQueue.main.async {
+                self?.restartingObserver = false
+                self?.observerMessage = message
+                self?.pollLocal()
+            }
+        }
+    }
+
     func openBackgroundLog() {
         let url = RunnerPulseBackgroundControl.logURL()
         if FileManager.default.fileExists(atPath: url.path) {
@@ -706,7 +767,18 @@ final class RunnerPulseState: ObservableObject {
     }
 
     func pollLocal() {
-        localSnapshots = RunnerPulseLocalReader.load()
+        let current = RunnerPulseLocalReader.load()
+        let currentFresh = RunnerPulseLocalPolicy.hasFreshTelemetry(current)
+        let fallback = RunnerPulseLocalPolicy.shouldRefreshRemote(
+            previousFresh: lastLocalPollWasFresh,
+            currentFresh: currentFresh,
+            remoteConfigured: configured
+        )
+        lastLocalPollWasFresh = currentFresh
+        localSnapshots = current
+        // Refresh immediately when the last live local heartbeat disappears,
+        // rather than waiting for the next slow GitHub polling interval.
+        if fallback { refresh(force: true) }
     }
 
     func start() {
@@ -965,7 +1037,7 @@ private struct LocalDashboard: View {
 
     private var live: [RunnerPulseLocalSnapshot] { snapshots.filter { $0.isFresh() } }
     private var events: [(Int, RunnerPulseLocalEvent)] {
-        Array(snapshots.flatMap { snap in
+        Array(snapshots.filter { $0.isFresh() }.flatMap { snap in
             snap.recent_events.map { (snap.runner_id, $0) }
         }.sorted { $0.1.time > $1.1.time }.prefix(12))
     }
@@ -1170,6 +1242,49 @@ private struct RunnerPulsePanel: View {
             }
             .padding(16)
             Divider()
+            if !state.hasLocalTelemetry {
+                VStack(alignment: .leading, spacing: 7) {
+                    Label(state.hasStaleLocalTelemetry
+                          ? "Telemetria locale scaduta"
+                          : "Monitor locale non disponibile",
+                          systemImage: "exclamationmark.triangle")
+                        .foregroundStyle(.orange)
+                        .font(.system(size: 11, weight: .medium))
+                    if let age = state.latestLocalHeartbeatAge, state.hasStaleLocalTelemetry {
+                        Text("Ultimo heartbeat \(Int(age))s fa. Lo stato dei runner non è verificabile dai file locali; \(state.configured ? "visualizzo i dati GitHub." : "configura GitHub come alternativa.")")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text("Nessun heartbeat locale ricevuto. L'observer è indipendente dai runner CI.")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
+                    }
+                    HStack {
+                        Button {
+                            state.restartObserver()
+                        } label: {
+                            Label(state.restartingObserver ? "Riavvio observer…" : "Riavvia observer",
+                                  systemImage: "arrow.clockwise")
+                        }
+                        .disabled(state.restartingObserver)
+                        .buttonStyle(.bordered)
+                        Spacer()
+                        if state.configured {
+                            Button("Aggiorna GitHub") { state.refresh(force: true) }
+                                .buttonStyle(.plain)
+                        }
+                    }
+                    if let message = state.observerMessage {
+                        Text(message)
+                            .foregroundStyle(message.hasPrefix("Observer non riavviato") ? Color.red : Color.secondary)
+                            .font(.system(size: 10))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 9)
+                Divider()
+            }
             if !state.hasLiveLocalSession {
                 VStack(alignment: .leading, spacing: 7) {
                     HStack {
@@ -1362,12 +1477,16 @@ final class RunnerPulseAppDelegate: NSObject, NSApplicationDelegate {
         } else if !state.configured {
             button.title = ""
             button.contentTintColor = .systemOrange
-            button.toolTip = "RunnerPulse · avvia il monitor locale con runners"
+            button.toolTip = state.hasStaleLocalTelemetry
+                ? "RunnerPulse · telemetria locale scaduta (observer da verificare)"
+                : "RunnerPulse · monitor locale non disponibile"
         } else {
             button.title = snapshot.running.isEmpty ? "" : " \(snapshot.running.count)"
-            button.contentTintColor = snapshot.offlineCount > 0 || !snapshot.errors.isEmpty
-                ? .systemOrange : nil
-            button.toolTip = "RunnerPulse GitHub · \(snapshot.running.count) job in esecuzione, \(snapshot.queued.count) in coda"
+            button.contentTintColor = state.hasStaleLocalTelemetry ||
+                snapshot.offlineCount > 0 || !snapshot.errors.isEmpty ? .systemOrange : nil
+            button.toolTip = state.hasStaleLocalTelemetry
+                ? "RunnerPulse · telemetria locale scaduta, vista GitHub di fallback"
+                : "RunnerPulse GitHub · \(snapshot.running.count) job in esecuzione, \(snapshot.queued.count) in coda"
         }
     }
 
