@@ -52,6 +52,39 @@ Observer logs:
 - ~/Library/Logs/RunnerPulse/observer.log
 - ~/Library/Logs/RunnerPulse/observer.err.log
 
+### When the menu bar stops updating
+
+RunnerPulse only considers a local JSON heartbeat live for 6 seconds. Older
+snapshots may remain on disk, but they **no longer hold the UI in local mode**.
+If you configured a GitHub token and monitored repositories, it falls back to
+GitHub status and performs an immediate refresh on the live-to-stale transition.
+Without remote credentials, the UI explicitly displays that live status is
+unavailable; it does not show old work as current.
+
+When telemetry is absent or stale, click **Riavvia observer** in the panel.
+This runs `launchctl kickstart -k` **only** for
+`com.daniele.runnerpulse.observer`; it never touches the GitHub Actions runner
+services or interrupts running CI jobs. If the observer is not registered, the
+app explains that installation is required. On the Mac hosting the runners:
+
+~~~bash
+cd "$HOME/Projects/macos-microtools"
+git pull --ff-only
+make install-runnerpulse-observer
+make refresh-runnerpulse
+~~~
+
+You should update `~/Projects/local-runner-infra` first if the observer source
+is missing. `make install-runnerpulse-observer` starts and registers only the
+passive read-only collector. The status files are at
+`~/Library/Application Support/RunnerPulse/runners/runner-{1..4}.json` and the
+error log is `~/Library/Logs/RunnerPulse/observer.err.log`.
+
+If a *foreground* interactive runner session exists, the passive observer
+intentionally yields telemetry ownership to that session. Do not stop an
+interactive runner controller or force-restart an Actions runner while jobs
+are active.
+
 To disable observer auto-start without touching GitHub runner services:
 
 ~~~bash
