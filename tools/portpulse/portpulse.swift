@@ -430,6 +430,7 @@ final class PortPulseApp: NSObject, NSApplicationDelegate {
     }
 }
 
+#if !PORTPULSE_TEST
 @main
 struct PortPulseMain {
     static func main() {
@@ -444,4 +445,5 @@ struct PortPulseMain {
         app.run()
     }
 }
+#endif
 #endif
