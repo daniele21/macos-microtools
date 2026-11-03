@@ -634,7 +634,8 @@ final class PortPulseViewController: NSViewController {
             stop.contentTintColor = .systemRed
             stop.isEnabled = PortPulseCore.canTerminate(item, currentUID: Int(getuid()), ownPID: getpid())
             stop.toolTip = stop.isEnabled ? "Invia SIGTERM dopo conferma" : "Solo processi verificati del tuo utente"
-            actions.append(NSView())
+            // Do not insert an unconstrained spacer: on compact AppKit
+            // popovers it can push the destructive button beyond the card.
             actions.append(stop)
             let actionRow = horizontal(actions, spacing: 7)
             elements.append(actionRow)
