@@ -1291,7 +1291,9 @@ private struct RunnerPulsePanel: View {
                 .padding(.vertical, 9)
                 Divider()
             }
-            if !state.hasLiveLocalSession {
+            // Stale telemetry means we cannot establish whether workers are
+            // already busy. Never encourage starting another runner session.
+            if !state.hasLiveLocalSession && !state.hasStaleLocalTelemetry {
                 VStack(alignment: .leading, spacing: 7) {
                     HStack {
                         Button {
