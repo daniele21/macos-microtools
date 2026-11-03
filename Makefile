@@ -32,7 +32,6 @@ refresh-menumeter:
 	@nohup $(PREFIX)/menumeter >/dev/null 2>&1 </dev/null &
 	@echo "✓ MenuMeter refreshed (v4)"
 
-
 bin/TerminalClip.app/Contents/MacOS/TerminalClip: tools/terminalclip/terminalclip.swift tools/terminalclip/Info.plist | bin
 	mkdir -p bin/TerminalClip.app/Contents/MacOS
 	$(SWIFTC) $(SWIFTFLAGS) -framework AppKit -framework ApplicationServices -framework Carbon tools/terminalclip/terminalclip.swift -o bin/TerminalClip.app/Contents/MacOS/TerminalClip
@@ -89,8 +88,6 @@ uninstall: uninstall-terminalclip uninstall-runnerpulse uninstall-displaypulse
 clean:
 	rm -rf bin
 
-
-
 # RunnerPulse: native AppKit + SwiftUI menu bar utility.
 bin/RunnerPulse.app/Contents/MacOS/RunnerPulse: tools/runnerpulse/runnerpulse.swift tools/runnerpulse/Info.plist | bin
 	mkdir -p bin/RunnerPulse.app/Contents/MacOS
@@ -127,7 +124,6 @@ uninstall-runnerpulse:
 	rm -rf $(HOME)/.local/opt/RunnerPulse.app
 	@echo "✓ RunnerPulse removed (Keychain entry retained; remove token in app first)"
 
-
 # Passive observer is a separate login LaunchAgent. Does not start or stop CI runners.
 install-runnerpulse-observer:
 	/bin/bash tools/runnerpulse/install-observer.sh
@@ -136,7 +132,6 @@ uninstall-runnerpulse-observer:
 	-launchctl bootout gui/$$(id -u)/com.daniele.runnerpulse.observer >/dev/null 2>&1
 	rm -f "$(HOME)/Library/LaunchAgents/com.daniele.runnerpulse.observer.plist"
 	@echo "✓ Passive observer removed; GitHub runner services untouched"
-
 
 # DisplayPulse: one-file native AppKit brightness control, optional m1ddc for hardware DDC/CI.
 .PHONY: build-displaypulse install-displaypulse refresh-displaypulse test-displaypulse uninstall-displaypulse enable-displaypulse-login disable-displaypulse-login status-displaypulse-login
@@ -196,3 +191,60 @@ uninstall-displaypulse:
 	-pkill -x DisplayPulse 2>/dev/null
 	rm -rf $(HOME)/.local/opt/DisplayPulse.app
 	@echo "✓ DisplayPulse uninstalled"
+
+# PortPulse: TCP listener monitor; macOS AppKit app that lives only in the menu bar.
+.PHONY: build-portpulse install-portpulse refresh-portpulse test-portpulse uninstall-portpulse enable-portpulse-login disable-portpulse-login status-portpulse-login
+
+bin/PortPulse.app/Contents/MacOS/PortPulse: tools/portpulse/portpulse.swift tools/portpulse/Info.plist | bin
+	mkdir -p bin/PortPulse.app/Contents/MacOS
+	$(SWIFTC) -parse-as-library $(SWIFTFLAGS) -framework AppKit tools/portpulse/portpulse.swift -o bin/PortPulse.app/Contents/MacOS/PortPulse
+	cp tools/portpulse/Info.plist bin/PortPulse.app/Contents/Info.plist
+	-codesign --force --sign - bin/PortPulse.app
+
+build-portpulse: bin/PortPulse.app/Contents/MacOS/PortPulse
+
+install-portpulse: build-portpulse
+	mkdir -p $(HOME)/.local/opt
+	rm -rf $(HOME)/.local/opt/PortPulse.app
+	ditto bin/PortPulse.app $(HOME)/.local/opt/PortPulse.app
+	@echo "✓ PortPulse installed to $(HOME)/.local/opt/PortPulse.app"
+
+refresh-portpulse:
+	$(MAKE) -B build-portpulse
+	@pkill -x PortPulse 2>/dev/null || true
+	$(MAKE) install-portpulse
+	@open -n "$(HOME)/.local/opt/PortPulse.app"
+
+test-portpulse: | bin
+	$(SWIFTC) -parse-as-library -D PORTPULSE_TEST tools/portpulse/portpulse.swift tools/portpulse/tests/main.swift -o bin/portpulse-tests
+	./bin/portpulse-tests
+	@/bin/bash -n tools/portpulse/login-item.sh
+	@if [ "$$(uname -s)" = Darwin ]; then \
+		$(MAKE) -B build-portpulse; \
+		plutil -lint bin/PortPulse.app/Contents/Info.plist; \
+		test -x bin/PortPulse.app/Contents/MacOS/PortPulse; \
+		test "$$(/usr/libexec/PlistBuddy -c 'Print :LSUIElement' bin/PortPulse.app/Contents/Info.plist)" = "true"; \
+		temp=$$(mktemp); trap 'rm -f "$$temp"' EXIT; \
+		/bin/bash tools/portpulse/login-item.sh render "$$temp"; \
+		test "$$(/usr/libexec/PlistBuddy -c 'Print :Label' "$$temp")" = "com.daniele.portpulse"; \
+		test "$$(/usr/libexec/PlistBuddy -c 'Print :RunAtLoad' "$$temp")" = "true"; \
+	fi
+
+enable-portpulse-login: install-portpulse
+	@/bin/bash tools/portpulse/login-item.sh enable
+
+disable-portpulse-login:
+	@/bin/bash tools/portpulse/login-item.sh disable
+
+status-portpulse-login:
+	@/bin/bash tools/portpulse/login-item.sh status
+
+uninstall-portpulse:
+	@/bin/bash tools/portpulse/login-item.sh disable
+	-pkill -x PortPulse 2>/dev/null || true
+	rm -rf $(HOME)/.local/opt/PortPulse.app
+	@echo "✓ PortPulse uninstalled"
+
+build: bin/PortPulse.app/Contents/MacOS/PortPulse
+install: install-portpulse
+uninstall: uninstall-portpulse
