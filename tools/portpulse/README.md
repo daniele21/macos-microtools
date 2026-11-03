@@ -17,6 +17,20 @@ The opt-in login command installs a per-user LaunchAgent to open the app at logi
 Check with **make status-portpulse-login** or disable with **make disable-portpulse-login**.
 Rebuild/restart with **make refresh-portpulse**. Uninstall with **make uninstall-portpulse**.
 
+## Popover UX (v0.2)
+
+The native macOS appearance follows light/dark mode and uses a compact three-part
+summary (**Totali**, **Locali**, **Rete**), a segmented scope filter, and a subtle
+process/port/PID search. Results use cards with monospaced port numbers, secondary
+bind/PID details, visible status labels and an expandable information/actions area.
+The scroll position and selected row are preserved across unchanged five-second
+scans. The count is based on unique port numbers, not lsof listener rows:
+a port with local *and* network bindings is counted once in **Rete**.
+
+The network indicator is **non-loopback**, not evidence of Internet exposure.
+For likely local HTTP development servers only, **Apri HTTP** opens a loopback URL
+in the browser by explicit click; the app does not probe protocol compatibility.
+
 ## Menu bar
 
 The **network symbol + listener count** is visible while the app is running.
