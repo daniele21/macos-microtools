@@ -242,6 +242,11 @@ final class PortPulseViewController: NSViewController {
     private var latestEvent: PortListener?
     private var hasLoaded = false
 
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        if hasLoaded { rebuild() }
+    }
+
     override func loadView() {
         let root = NSVisualEffectView(frame: NSRect(x: 0, y: 0, width: 426, height: 590))
         root.material = .popover
@@ -531,8 +536,13 @@ final class PortPulseViewController: NSViewController {
     private func makeListenerCard(_ item: PortListener, index: Int) -> NSView {
         let selected = item.identifier == selectedID
         let tint: NSColor = item.scope == .local ? PortPulsePalette.green : PortPulsePalette.orange
+        // Explicit contrast tokens: semantic NSColor.windowBackgroundColor can
+        // resolve as a light Aqua CGColor during offscreen AppKit layout.
+        let dark = view.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let cardFill = NSColor(calibratedWhite: dark ? (selected ? 0.22 : 0.19) :
+                                                  (selected ? 0.97 : 0.95), alpha: 0.97)
         let card = surface(
-            fill: NSColor.windowBackgroundColor.withAlphaComponent(selected ? 0.90 : 0.72),
+            fill: cardFill,
             stroke: selected ? tint.withAlphaComponent(0.62) : .separatorColor.withAlphaComponent(0.14),
             radius: 11
         )
@@ -647,11 +657,19 @@ final class PortPulseViewController: NSViewController {
 
     private func smallButton(_ text: String, symbol: String, action: Selector) -> NSButton {
         let button = NSButton(title: text, target: self, action: action)
-        button.bezelStyle = .rounded
+        button.isBordered = false
         button.controlSize = .small
-        button.font = .systemFont(ofSize: 11)
+        button.font = .systemFont(ofSize: 11, weight: .medium)
         button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
         button.imagePosition = .imageLeading
+        button.contentTintColor = .labelColor
+        button.wantsLayer = true
+        button.layer?.cornerRadius = 7
+        let dark = view.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        button.layer?.backgroundColor = NSColor(
+            calibratedWhite: dark ? 0.32 : 0.87, alpha: 0.94
+        ).cgColor
+        button.heightAnchor.constraint(equalToConstant: 27).isActive = true
         return button
     }
 
