@@ -79,6 +79,48 @@ enum PortPulseCore {
     }
 }
 
+
+struct PortPulseSummary: Equatable {
+    let total: Int
+    let local: Int
+    let network: Int
+
+    init(_ listeners: [PortListener]) {
+        let allPorts = Set(listeners.map(\.port))
+        let networkPorts = Set(listeners.filter { $0.scope == .network }.map(\.port))
+        total = allPorts.count
+        network = networkPorts.count
+        // A port listening on both loopback and the network is classified as
+        // network, preventing summary totals from exceeding the unique count.
+        local = allPorts.subtracting(networkPorts).count
+    }
+}
+
+extension PortPulseCore {
+    static func likelyHTTPURL(for listener: PortListener) -> URL? {
+        let name = listener.command.lowercased()
+        let candidates = ["node", "next", "vite", "uvicorn", "flask",
+                          "httpd", "nginx", "caddy", "bun", "deno", "rails"]
+        guard candidates.contains(where: name.contains) else { return nil }
+        let ipv6 = listener.host.contains(":") && listener.host != "0.0.0.0"
+        let host = ipv6 ? "[::1]" : "127.0.0.1"
+        let scheme = listener.port == 443 ? "https" : "http"
+        return URL(string: "\(scheme)://\(host):\(listener.port)")
+    }
+
+    static func matches(_ listener: PortListener, filter: Int, search: String) -> Bool {
+        let scopeMatches = filter == 0 ||
+            (filter == 1 && listener.scope == .local) ||
+            (filter == 2 && listener.scope == .network)
+        let term = search.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return scopeMatches && (term.isEmpty ||
+            String(listener.port).contains(term) ||
+            String(listener.pid).contains(term) ||
+            listener.command.lowercased().contains(term) ||
+            listener.host.lowercased().contains(term))
+    }
+}
+
 struct PortPulseDiff {
     private(set) var initialized = false
     private var previous = Set<String>()
@@ -134,51 +176,102 @@ private final class PortPulseFlippedView: NSView {
     override var isFlipped: Bool { true }
 }
 
+// Design system for the compact menu-bar surface. Colors follow the macOS
+// appearance; orange denotes non-loopback binds, not public Internet access.
+private enum PortPulsePalette {
+    static let inset: CGFloat = 14
+    static let green = NSColor.systemGreen
+    static let orange = NSColor.systemOrange
+    static let neutral = NSColor.secondaryLabelColor
+}
+
 final class PortPulseViewController: NSViewController {
     var onRefresh: (() -> Void)?
     var onQuit: (() -> Void)?
     var onStop: ((PortListener) -> Void)?
+    var onOpen: ((URL) -> Void)?
 
     private let titleField = NSTextField(labelWithString: "PortPulse")
-    private let summaryField = NSTextField(labelWithString: "Lettura in corso…")
+    private let updatedField = NSTextField(labelWithString: "In attesa della prima scansione")
+    private let totalMetric = NSTextField(labelWithString: "—")
+    private let localMetric = NSTextField(labelWithString: "—")
+    private let networkMetric = NSTextField(labelWithString: "—")
     private let eventField = NSTextField(wrappingLabelWithString: "")
     private let filter = NSSegmentedControl(labels: ["Tutte", "Locali", "Rete"],
                                             trackingMode: .selectOne, target: nil, action: nil)
     private let search = NSSearchField()
     private let rows = NSStackView()
-    private let statusField = NSTextField(labelWithString: "Monitoraggio TCP · ogni 5 s")
+    private let scroll = NSScrollView()
+    private let footerField = NSTextField(labelWithString: "TCP · ogni 5 s")
     private var listeners: [PortListener] = []
     private var selectedID: String?
     private var lastError: String?
-    private var lastEvent: String?
+    private var latestEvent: PortListener?
+    private var hasLoaded = false
 
     override func loadView() {
-        let root = NSView(frame: NSRect(x: 0, y: 0, width: 390, height: 515))
+        let root = NSVisualEffectView(frame: NSRect(x: 0, y: 0, width: 426, height: 590))
+        root.material = .popover
+        root.blendingMode = .behindWindow
+        root.state = .active
         view = root
 
         titleField.font = .boldSystemFont(ofSize: 16)
-        summaryField.font = .systemFont(ofSize: 12, weight: .medium)
-        summaryField.textColor = .secondaryLabelColor
-        eventField.font = .systemFont(ofSize: 11)
-        eventField.textColor = .systemOrange
-        eventField.maximumNumberOfLines = 2
-        eventField.isHidden = true
+        titleField.setAccessibilityLabel("PortPulse")
+        updatedField.font = .systemFont(ofSize: 10)
+        updatedField.textColor = .secondaryLabelColor
+        updatedField.alignment = .right
+        updatedField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        let symbol = NSImageView()
+        symbol.image = NSImage(systemSymbolName: "network", accessibilityDescription: "Rete")
+        symbol.contentTintColor = .controlAccentColor
+        symbol.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 17, weight: .semibold)
+        NSLayoutConstraint.activate([
+            symbol.widthAnchor.constraint(equalToConstant: 21),
+            symbol.heightAnchor.constraint(equalToConstant: 21)
+        ])
+        let head = horizontal([symbol, titleField, NSView(), updatedField], spacing: 7)
+
+        let metricRow = horizontal([
+            makeMetric("Totali", icon: "square.stack.3d.up", count: totalMetric, tint: .secondaryLabelColor),
+            makeMetric("Locali", icon: "desktopcomputer", count: localMetric, tint: PortPulsePalette.green),
+            makeMetric("Rete", icon: "network", count: networkMetric, tint: PortPulsePalette.orange)
+        ], spacing: 8)
+        metricRow.distribution = .fillEqually
+        metricRow.heightAnchor.constraint(equalToConstant: 63).isActive = true
+
         filter.selectedSegment = 0
+        filter.segmentStyle = .rounded
+        filter.controlSize = .regular
         filter.target = self
         filter.action = #selector(filtersChanged)
-        search.placeholderString = "Cerca porta o processo"
+        filter.toolTip = "Rete: binding non-loopback, non necessariamente accessibili da Internet"
+        filter.heightAnchor.constraint(equalToConstant: 27).isActive = true
+
+        search.placeholderString = "Cerca porta, processo, PID"
+        search.controlSize = .regular
+        search.focusRingType = .default
         search.target = self
         search.action = #selector(filtersChanged)
         search.sendsSearchStringImmediately = true
+        search.heightAnchor.constraint(equalToConstant: 28).isActive = true
+
+        eventField.font = .systemFont(ofSize: 11, weight: .medium)
+        eventField.textColor = .systemOrange
+        eventField.maximumNumberOfLines = 2
+        eventField.isHidden = true
+        eventField.setAccessibilityLabel("Nuova porta non locale")
+
         rows.orientation = .vertical
-        rows.spacing = 7
+        rows.spacing = 6
         rows.alignment = .width
         rows.translatesAutoresizingMaskIntoConstraints = false
 
-        let scroll = NSScrollView()
         scroll.hasVerticalScroller = true
+        scroll.scrollerStyle = .overlay
         scroll.drawsBackground = false
         scroll.borderType = .noBorder
+        scroll.translatesAutoresizingMaskIntoConstraints = false
         let document = PortPulseFlippedView()
         document.translatesAutoresizingMaskIntoConstraints = false
         document.addSubview(rows)
@@ -188,140 +281,362 @@ final class PortPulseViewController: NSViewController {
             rows.leadingAnchor.constraint(equalTo: document.leadingAnchor),
             rows.trailingAnchor.constraint(equalTo: document.trailingAnchor),
             rows.topAnchor.constraint(equalTo: document.topAnchor),
-            rows.bottomAnchor.constraint(equalTo: document.bottomAnchor)
+            rows.bottomAnchor.constraint(equalTo: document.bottomAnchor),
+            scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 260)
         ])
-        scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 300).isActive = true
 
-        let refresh = NSButton(title: "Aggiorna", target: self, action: #selector(refreshClicked))
+        let refresh = NSButton(title: "", target: self, action: #selector(refreshClicked))
+        refresh.image = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: "Aggiorna")
+        refresh.imagePosition = .imageOnly
         refresh.bezelStyle = .rounded
+        refresh.toolTip = "Aggiorna le porte ora"
+        refresh.setAccessibilityLabel("Aggiorna")
+        refresh.widthAnchor.constraint(equalToConstant: 29).isActive = true
+
         let quit = NSButton(title: "Esci", target: self, action: #selector(quitClicked))
         quit.bezelStyle = .rounded
-        statusField.font = .systemFont(ofSize: 10)
-        statusField.textColor = .tertiaryLabelColor
-        let footer = horizontal([statusField, NSView(), refresh, quit])
-        let column = NSStackView(views: [titleField, summaryField, eventField, filter, search, scroll, footer])
-        column.orientation = .vertical
-        column.spacing = 11
-        column.alignment = .width
-        column.translatesAutoresizingMaskIntoConstraints = false
-        root.addSubview(column)
+        quit.font = .systemFont(ofSize: 11)
+        footerField.font = .systemFont(ofSize: 10)
+        footerField.textColor = .tertiaryLabelColor
+        footerField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        let footer = horizontal([footerField, NSView(), refresh, quit], spacing: 7)
+
+        let separator = NSBox()
+        separator.boxType = .separator
+        separator.heightAnchor.constraint(equalToConstant: 1).isActive = true
+
+        let content = NSStackView(views: [head, metricRow, filter, search,
+                                          eventField, scroll, separator, footer])
+        content.orientation = .vertical
+        content.spacing = 10
+        content.alignment = .width
+        content.distribution = .fill
+        content.translatesAutoresizingMaskIntoConstraints = false
+        root.addSubview(content)
         NSLayoutConstraint.activate([
-            column.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 14),
-            column.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -14),
-            column.topAnchor.constraint(equalTo: root.topAnchor, constant: 15),
-            column.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -14)
+            content.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: PortPulsePalette.inset),
+            content.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -PortPulsePalette.inset),
+            content.topAnchor.constraint(equalTo: root.topAnchor, constant: 15),
+            content.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -12)
         ])
+        hasLoaded = true
+        rebuild(resetScroll: true)
     }
 
-    private func horizontal(_ views: [NSView]) -> NSStackView {
+    private func horizontal(_ views: [NSView], spacing: CGFloat = 8) -> NSStackView {
         let stack = NSStackView(views: views)
         stack.orientation = .horizontal
         stack.alignment = .centerY
-        stack.spacing = 8
+        stack.spacing = spacing
         return stack
     }
 
-    private func label(_ text: String, size: CGFloat = 11, color: NSColor = .labelColor) -> NSTextField {
-        let result = NSTextField(labelWithString: text)
-        result.font = .systemFont(ofSize: size)
-        result.textColor = color
-        result.lineBreakMode = .byTruncatingMiddle
-        return result
+    private func vertical(_ views: [NSView], spacing: CGFloat = 3) -> NSStackView {
+        let stack = NSStackView(views: views)
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = spacing
+        return stack
+    }
+
+    private func label(_ value: String, size: CGFloat = 11,
+                       weight: NSFont.Weight = .regular,
+                       color: NSColor = .labelColor) -> NSTextField {
+        let item = NSTextField(labelWithString: value)
+        item.font = .systemFont(ofSize: size, weight: weight)
+        item.textColor = color
+        item.lineBreakMode = .byTruncatingTail
+        item.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        return item
+    }
+
+    private func surface(fill: NSColor, stroke: NSColor = .clear,
+                         radius: CGFloat = 10) -> NSView {
+        let box = NSView()
+        box.wantsLayer = true
+        box.layer?.cornerRadius = radius
+        box.layer?.backgroundColor = fill.cgColor
+        box.layer?.borderColor = stroke.cgColor
+        box.layer?.borderWidth = 1
+        return box
+    }
+
+    private func makeMetric(_ caption: String, icon: String,
+                            count: NSTextField, tint: NSColor) -> NSView {
+        let bg = surface(fill: tint.withAlphaComponent(0.08),
+                         stroke: tint.withAlphaComponent(0.23), radius: 11)
+        let iconView = NSImageView()
+        iconView.image = NSImage(systemSymbolName: icon, accessibilityDescription: caption)
+        iconView.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 14, weight: .medium)
+        iconView.contentTintColor = tint
+        iconView.widthAnchor.constraint(equalToConstant: 18).isActive = true
+        iconView.heightAnchor.constraint(equalToConstant: 18).isActive = true
+        count.font = .monospacedDigitSystemFont(ofSize: 20, weight: .semibold)
+        count.textColor = .labelColor
+        let text = vertical([count, label(caption, size: 10, color: .secondaryLabelColor)], spacing: 0)
+        let inside = horizontal([iconView, text], spacing: 8)
+        inside.translatesAutoresizingMaskIntoConstraints = false
+        bg.addSubview(inside)
+        NSLayoutConstraint.activate([
+            inside.leadingAnchor.constraint(equalTo: bg.leadingAnchor, constant: 11),
+            inside.trailingAnchor.constraint(lessThanOrEqualTo: bg.trailingAnchor, constant: -8),
+            inside.centerYAnchor.constraint(equalTo: bg.centerYAnchor)
+        ])
+        bg.setAccessibilityElement(true)
+        bg.setAccessibilityRole(.group)
+        bg.setAccessibilityLabel("Porte \(caption)")
+        return bg
+    }
+
+    private func makeBadge(_ title: String, tint: NSColor) -> NSView {
+        let bg = surface(fill: tint.withAlphaComponent(0.13),
+                         stroke: tint.withAlphaComponent(0.3), radius: 8)
+        let text = label(title, size: 10, weight: .medium, color: tint)
+        text.translatesAutoresizingMaskIntoConstraints = false
+        bg.addSubview(text)
+        NSLayoutConstraint.activate([
+            text.leadingAnchor.constraint(equalTo: bg.leadingAnchor, constant: 7),
+            text.trailingAnchor.constraint(equalTo: bg.trailingAnchor, constant: -7),
+            text.topAnchor.constraint(equalTo: bg.topAnchor, constant: 4),
+            text.bottomAnchor.constraint(equalTo: bg.bottomAnchor, constant: -4)
+        ])
+        bg.toolTip = title == "Rete"
+            ? "Binding non-loopback: raggiungibilità effettiva dipendente da firewall e rete"
+            : "Solo loopback, locale al Mac"
+        return bg
     }
 
     func render(_ items: [PortListener], newExposures: [PortListener], error: String?) {
+        let changed = items != listeners || lastError != error
         listeners = items
         lastError = error
-        if let added = newExposures.first {
-            lastEvent = "Nuova porta non locale: \(added.address) · \(added.command)"
-        }
-        rebuild()
+        let oldEvent = latestEvent
+        if let first = newExposures.first { latestEvent = first }
+        if let existing = latestEvent, !items.contains(existing) { latestEvent = nil }
+
+        // A successful poll updates the timestamp without rebuilding every card.
+        // This preserves focus, selection and the current scroll position.
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm:ss"
+        updatedField.stringValue = error == nil
+            ? "● Aggiornato \(formatter.string(from: Date()))"
+            : "⚠ Scansione non riuscita"
+        updatedField.textColor = error == nil ? .secondaryLabelColor : .systemOrange
+        if changed || oldEvent != latestEvent { rebuild() }
     }
 
-    private func rebuild() {
-        let networkCount = listeners.filter { $0.scope == .network }.count
-        let localCount = listeners.count - networkCount
-        summaryField.stringValue = lastError ?? "\(Set(listeners.map(\.port)).count) porte · \(localCount) locali · \(networkCount) non locali"
-        summaryField.textColor = lastError == nil ? .secondaryLabelColor : .systemRed
-        eventField.stringValue = lastEvent ?? ""
-        eventField.isHidden = lastEvent == nil
+    private var visible: [PortListener] {
+        listeners.filter {
+            PortPulseCore.matches($0, filter: filter.selectedSegment, search: search.stringValue)
+        }
+    }
 
-        rows.arrangedSubviews.forEach { item in
-            rows.removeArrangedSubview(item)
-            item.removeFromSuperview()
+    private func rebuild(resetScroll: Bool = false) {
+        guard hasLoaded else { return }
+        let oldY = scroll.contentView.bounds.origin.y
+        let summary = PortPulseSummary(listeners)
+        totalMetric.stringValue = "\(summary.total)"
+        localMetric.stringValue = "\(summary.local)"
+        networkMetric.stringValue = "\(summary.network)"
+        totalMetric.setAccessibilityLabel("\(summary.total) porte totali")
+        localMetric.setAccessibilityLabel("\(summary.local) porte solo locali")
+        networkMetric.setAccessibilityLabel("\(summary.network) porte con binding non-locali")
+
+        if let error = lastError {
+            footerField.stringValue = "Errore: \(error.prefix(55))"
+            footerField.textColor = .systemOrange
+        } else {
+            footerField.stringValue = "TCP · aggiornamento ogni 5 s"
+            footerField.textColor = .tertiaryLabelColor
         }
-        let query = search.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let visible = listeners.filter { item in
-            let scopeMatches = filter.selectedSegment == 0 ||
-                (filter.selectedSegment == 1 && item.scope == .local) ||
-                (filter.selectedSegment == 2 && item.scope == .network)
-            return scopeMatches && (query.isEmpty ||
-                String(item.port).contains(query) ||
-                item.command.lowercased().contains(query) ||
-                item.host.lowercased().contains(query))
+        if let event = latestEvent {
+            eventField.stringValue = "▲ Nuova porta di rete · \(event.port) · \(event.command)"
+            eventField.isHidden = false
+        } else {
+            eventField.isHidden = true
         }
-        if visible.isEmpty {
-            rows.addArrangedSubview(label(lastError == nil ? "Nessuna porta corrispondente." : "Dati non disponibili.", color: .secondaryLabelColor))
+
+        rows.arrangedSubviews.forEach {
+            rows.removeArrangedSubview($0)
+            $0.removeFromSuperview()
         }
-        for (index, item) in visible.enumerated() {
-            let dot = label(item.scope == .local ? "●" : "▲", size: 12,
-                            color: item.scope == .local ? .systemGreen : .systemOrange)
-            let name = NSButton(title: "\(item.port)   \(item.command)", target: self,
-                                action: #selector(rowClicked(_:)))
-            name.tag = index
-            name.isBordered = false
-            name.alignment = .left
-            name.font = .monospacedDigitSystemFont(ofSize: 12, weight: .medium)
-            name.lineBreakMode = .byTruncatingTail
-            let meta = label("\(item.host) · PID \(item.pid)", size: 10, color: .secondaryLabelColor)
-            let entry = NSStackView(views: [horizontal([dot, name]), meta])
-            entry.orientation = .vertical
-            entry.alignment = .leading
-            entry.spacing = 2
-            rows.addArrangedSubview(entry)
-            entry.widthAnchor.constraint(equalTo: rows.widthAnchor).isActive = true
-            if selectedID == item.identifier {
-                let details = label("TCP  \(item.address) · UID \(item.uid.map(String.init) ?? "non disponibile")",
-                                    size: 10, color: .secondaryLabelColor)
-                let copy = NSButton(title: "Copia dettagli", target: self, action: #selector(copyClicked))
-                let stop = NSButton(title: "Arresta…", target: self, action: #selector(stopClicked))
-                stop.isEnabled = PortPulseCore.canTerminate(item, currentUID: Int(getuid()), ownPID: getpid())
-                stop.toolTip = stop.isEnabled ? "Invia SIGTERM dopo conferma" : "Solo processi del tuo utente"
-                let actions = horizontal([copy, stop])
-                let expanded = NSStackView(views: [details, actions])
-                expanded.orientation = .vertical
-                expanded.alignment = .leading
-                expanded.spacing = 5
-                rows.addArrangedSubview(expanded)
-                expanded.widthAnchor.constraint(equalTo: rows.widthAnchor).isActive = true
+
+        let filtered = visible
+        if filtered.isEmpty {
+            let empty = label(lastError == nil ? "Nessuna porta corrispondente." : "Dati non disponibili.",
+                              size: 12, color: .secondaryLabelColor)
+            empty.alignment = .center
+            let container = surface(fill: .controlBackgroundColor.withAlphaComponent(0.20))
+            container.addSubview(empty)
+            empty.translatesAutoresizingMaskIntoConstraints = false
+            NSLayoutConstraint.activate([
+                empty.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 10),
+                empty.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -10),
+                empty.centerYAnchor.constraint(equalTo: container.centerYAnchor),
+                container.heightAnchor.constraint(equalToConstant: 66)
+            ])
+            rows.addArrangedSubview(container)
+            container.widthAnchor.constraint(equalTo: rows.widthAnchor).isActive = true
+        }
+
+        for (index, item) in filtered.enumerated() {
+            let card = makeListenerCard(item, index: index)
+            rows.addArrangedSubview(card)
+            card.widthAnchor.constraint(equalTo: rows.widthAnchor).isActive = true
+        }
+        view.layoutSubtreeIfNeeded()
+        if let document = scroll.documentView {
+            let maxY = max(0, document.bounds.height - scroll.contentView.bounds.height)
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: resetScroll ? 0 : min(oldY, maxY)))
+            scroll.reflectScrolledClipView(scroll.contentView)
+        }
+    }
+
+    private func makeListenerCard(_ item: PortListener, index: Int) -> NSView {
+        let selected = item.identifier == selectedID
+        let tint: NSColor = item.scope == .local ? PortPulsePalette.green : PortPulsePalette.orange
+        let card = surface(
+            fill: NSColor.controlBackgroundColor.withAlphaComponent(selected ? 0.62 : 0.37),
+            stroke: selected ? tint.withAlphaComponent(0.62) : .separatorColor.withAlphaComponent(0.14),
+            radius: 11
+        )
+        let dot = surface(fill: tint, radius: 4)
+        dot.widthAnchor.constraint(equalToConstant: 8).isActive = true
+        dot.heightAnchor.constraint(equalToConstant: 8).isActive = true
+        let port = label("\(item.port)", size: 14, weight: .semibold)
+        port.font = .monospacedDigitSystemFont(ofSize: 14, weight: .semibold)
+        port.widthAnchor.constraint(equalToConstant: 49).isActive = true
+        let line = surface(fill: .separatorColor.withAlphaComponent(0.5), radius: 0)
+        line.widthAnchor.constraint(equalToConstant: 1).isActive = true
+        line.heightAnchor.constraint(equalToConstant: 25).isActive = true
+        let process = label(item.command, size: 12, weight: .semibold)
+        let metadata = label("\(item.host) · PID \(item.pid)", size: 10, color: .secondaryLabelColor)
+        let textColumn = vertical([process, metadata], spacing: 2)
+        textColumn.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        let badge = makeBadge(item.scope == .local ? "Locale" : "Rete", tint: tint)
+        let arrow = NSImageView()
+        arrow.image = NSImage(systemSymbolName: selected ? "chevron.up" : "chevron.down",
+                              accessibilityDescription: "Dettagli")
+        arrow.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 9, weight: .medium)
+        arrow.contentTintColor = .tertiaryLabelColor
+        arrow.widthAnchor.constraint(equalToConstant: 10).isActive = true
+        let header = horizontal([dot, port, line, textColumn, NSView(), badge, arrow], spacing: 7)
+        header.translatesAutoresizingMaskIntoConstraints = false
+        header.heightAnchor.constraint(equalToConstant: 45).isActive = true
+
+        // A borderless accessible button overlays the visible header, making
+        // the entire row clickable without compromising typographic layout.
+        let hit = NSButton(title: "", target: self, action: #selector(rowClicked(_:)))
+        hit.tag = index
+        hit.isBordered = false
+        hit.isTransparent = true
+        hit.toolTip = "\(item.command) · \(item.address) · PID \(item.pid)"
+        hit.setAccessibilityLabel("Porta \(item.port), \(item.command), \(item.scope == .local ? "locale" : "rete"), \(selected ? "chiudi" : "apri") dettagli")
+        header.addSubview(hit)
+        hit.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            hit.leadingAnchor.constraint(equalTo: header.leadingAnchor),
+            hit.trailingAnchor.constraint(equalTo: header.trailingAnchor),
+            hit.topAnchor.constraint(equalTo: header.topAnchor),
+            hit.bottomAnchor.constraint(equalTo: header.bottomAnchor)
+        ])
+
+        var elements: [NSView] = [header]
+        if selected {
+            let detailBox = surface(fill: .secondaryLabelColor.withAlphaComponent(0.055),
+                                    stroke: .separatorColor.withAlphaComponent(0.12), radius: 8)
+            let address = label(item.address, size: 11, weight: .medium)
+            address.lineBreakMode = .byTruncatingMiddle
+            let addressColumn = vertical([
+                label("INDIRIZZO", size: 9, color: .secondaryLabelColor),
+                address
+            ], spacing: 2)
+            let pidColumn = vertical([
+                label("PID", size: 9, color: .secondaryLabelColor),
+                label("\(item.pid)", size: 11, weight: .medium)
+            ], spacing: 2)
+            let uidColumn = vertical([
+                label("UID", size: 9, color: .secondaryLabelColor),
+                label(item.uid.map(String.init) ?? "—", size: 11, weight: .medium)
+            ], spacing: 2)
+            let detailRow = horizontal([addressColumn, NSView(), pidColumn, uidColumn], spacing: 12)
+            detailRow.translatesAutoresizingMaskIntoConstraints = false
+            detailBox.addSubview(detailRow)
+            NSLayoutConstraint.activate([
+                detailRow.leadingAnchor.constraint(equalTo: detailBox.leadingAnchor, constant: 10),
+                detailRow.trailingAnchor.constraint(equalTo: detailBox.trailingAnchor, constant: -10),
+                detailRow.topAnchor.constraint(equalTo: detailBox.topAnchor, constant: 9),
+                detailRow.bottomAnchor.constraint(equalTo: detailBox.bottomAnchor, constant: -9)
+            ])
+            elements.append(detailBox)
+
+            let copy = smallButton("Copia", symbol: "doc.on.doc", action: #selector(copyClicked))
+            var actions: [NSView] = [copy]
+            if let url = PortPulseCore.likelyHTTPURL(for: item) {
+                let open = smallButton("Apri HTTP", symbol: "arrow.up.right.square", action: #selector(openClicked))
+                open.toolTip = "Prova ad aprire \(url.absoluteString) nel browser; protocollo non verificato"
+                actions.append(open)
             }
+            let stop = smallButton("Termina…", symbol: "stop.circle", action: #selector(stopClicked))
+            stop.contentTintColor = .systemRed
+            stop.isEnabled = PortPulseCore.canTerminate(item, currentUID: Int(getuid()), ownPID: getpid())
+            stop.toolTip = stop.isEnabled ? "Invia SIGTERM dopo conferma" : "Solo processi verificati del tuo utente"
+            actions.append(NSView())
+            actions.append(stop)
+            let actionRow = horizontal(actions, spacing: 7)
+            elements.append(actionRow)
         }
+
+        let inside = vertical(elements, spacing: selected ? 9 : 0)
+        inside.alignment = .width
+        inside.translatesAutoresizingMaskIntoConstraints = false
+        card.addSubview(inside)
+        NSLayoutConstraint.activate([
+            inside.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 10),
+            inside.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -10),
+            inside.topAnchor.constraint(equalTo: card.topAnchor, constant: selected ? 9 : 3),
+            inside.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: selected ? -11 : -3)
+        ])
+        return card
     }
 
-    @objc private func filtersChanged() { rebuild() }
+    private func smallButton(_ text: String, symbol: String, action: Selector) -> NSButton {
+        let button = NSButton(title: text, target: self, action: action)
+        button.bezelStyle = .rounded
+        button.controlSize = .small
+        button.font = .systemFont(ofSize: 11)
+        button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+        button.imagePosition = .imageLeading
+        return button
+    }
+
+    @objc private func filtersChanged() { rebuild(resetScroll: true) }
 
     @objc private func rowClicked(_ sender: NSButton) {
-        let query = search.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let visible = listeners.filter { item in
-            let matches = filter.selectedSegment == 0 ||
-                (filter.selectedSegment == 1 && item.scope == .local) ||
-                (filter.selectedSegment == 2 && item.scope == .network)
-            return matches && (query.isEmpty || String(item.port).contains(query) ||
-                item.command.lowercased().contains(query) || item.host.lowercased().contains(query))
-        }
-        guard visible.indices.contains(sender.tag) else { return }
-        let id = visible[sender.tag].identifier
+        let filtered = visible
+        guard filtered.indices.contains(sender.tag) else { return }
+        let id = filtered[sender.tag].identifier
         selectedID = selectedID == id ? nil : id
         rebuild()
     }
 
-    private var selected: PortListener? { listeners.first { $0.identifier == selectedID } }
+    private var selected: PortListener? {
+        listeners.first { $0.identifier == selectedID }
+    }
 
     @objc private func copyClicked() {
         guard let item = selected else { return }
         NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString("\(item.command) · PID \(item.pid) · TCP \(item.address)", forType: .string)
-        statusField.stringValue = "Dettagli copiati"
+        NSPasteboard.general.setString(
+            "\(item.command) · PID \(item.pid) · UID \(item.uid.map(String.init) ?? "—") · TCP \(item.address)",
+            forType: .string
+        )
+        footerField.stringValue = "Dettagli copiati"
+    }
+
+    @objc private func openClicked() {
+        guard let item = selected, let url = PortPulseCore.likelyHTTPURL(for: item) else { return }
+        onOpen?(url)
     }
 
     @objc private func stopClicked() {
@@ -336,7 +651,7 @@ final class PortPulseViewController: NSViewController {
         if alert.runModal() == .alertFirstButtonReturn { onStop?(item) }
     }
 
-    func showActionResult(_ message: String) { statusField.stringValue = message }
+    func showActionResult(_ message: String) { footerField.stringValue = message }
     @objc private func refreshClicked() { onRefresh?() }
     @objc private func quitClicked() { onQuit?() }
 }
@@ -353,11 +668,15 @@ final class PortPulseApp: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         popover.behavior = .transient
-        popover.contentSize = NSSize(width: 390, height: 515)
+        popover.contentSize = NSSize(width: 426, height: 590)
         popover.contentViewController = controller
         controller.onQuit = { NSApp.terminate(nil) }
         controller.onRefresh = { [weak self] in self?.refresh() }
         controller.onStop = { [weak self] listener in self?.terminate(listener) }
+        controller.onOpen = { [weak self] url in
+            let launched = NSWorkspace.shared.open(url)
+            self?.controller.showActionResult(launched ? "Apertura HTTP nel browser…" : "Impossibile aprire HTTP")
+        }
         if let button = statusItem.button {
             let image = NSImage(systemSymbolName: "network", accessibilityDescription: "PortPulse")
             image?.isTemplate = true
@@ -375,7 +694,12 @@ final class PortPulseApp: NSObject, NSApplicationDelegate {
     @objc private func toggle() {
         guard let button = statusItem.button else { return }
         if popover.isShown { popover.performClose(nil) }
-        else { popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY) }
+        else {
+            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+            // Keep search accessible without forcing an electric-blue focus
+            // ring before the user explicitly chooses to search.
+            popover.contentViewController?.view.window?.makeFirstResponder(nil)
+        }
     }
 
     private func refresh() {
@@ -391,11 +715,11 @@ final class PortPulseApp: NSObject, NSApplicationDelegate {
                     self.listeners = found
                     let added = self.diff.newNetworkListeners(found)
                     self.controller.render(found, newExposures: added, error: nil)
-                    self.statusItem.button?.title = " \(Set(found.map(\.port)).count)"
+                    self.statusItem.button?.title = " \(PortPulseSummary(found).total)"
                     self.statusItem.button?.contentTintColor =
                         found.contains(where: { $0.scope == .network }) ? .systemOrange : nil
                     self.statusItem.button?.toolTip =
-                        "PortPulse · \(found.count) listener TCP · \(found.filter { $0.scope == .network }.count) non locali"
+                        "PortPulse · \(PortPulseSummary(found).total) porte TCP · \(PortPulseSummary(found).network) rete"
                 case .failure(let error):
                     self.controller.render(self.listeners, newExposures: [], error: error.localizedDescription)
                     self.statusItem.button?.title = " !"
