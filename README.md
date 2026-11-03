@@ -24,8 +24,9 @@ Most modern macOS utilities suffer from feature creep: multi-gigabyte Electron r
 | [**TerminalClip**](tools/terminalclip/) | Copy Terminal.app output with ⌘⌥C, optional Zsh command/exit code metadata and diagnostic reports. | MVP (UI 0.2; macOS interaction test pending) |
 | [**RunnerPulse**](tools/runnerpulse/) | Monitor GitHub Actions self-hosted runners, workflow jobs, current steps, queue and failures in the menu bar. | MVP (v0.1) |
 | [**DisplayPulse**](tools/displaypulse/) | Hardware DDC/CI brightness test and fallback per-screen software dimmer in the menu bar. | MVP (v0.1; Atlantis hardware probe pending) |
+| [**PortPulse**](tools/portpulse/) | Monitor TCP listening ports, process owners and non-loopback bindings; optional safe SIGTERM after confirmation. | MVP (v0.1) |
 
-*More tools (local port monitor, AI VRAM monitor, and sleep toggles) are planned.*
+*More tools (AI VRAM monitor and sleep toggles) are planned.*
 
 ---
 
@@ -59,6 +60,11 @@ menumeter &
 To launch RunnerPulse:
 ```bash
 open "$HOME/.local/opt/RunnerPulse.app"
+```
+
+To launch PortPulse:
+```bash
+open "$HOME/.local/opt/PortPulse.app"
 ```
 
 To launch TerminalClip:
@@ -99,3 +105,7 @@ MIT License © 2026 Daniele Moltisanti
 ## DisplayPulse
 
 DisplayPulse supports optional m1ddc for real hardware brightness and a built-in software dimmer fallback. The Atlantis A05-P156WP's DDC/CI support is **not verified** yet. Install only this app with `make install-displaypulse`, open `~/.local/opt/DisplayPulse.app` and follow the [read-only probe instructions](tools/displaypulse/README.md). To start the menu-bar app automatically on every macOS login, run `make enable-displaypulse-login` once; inspect with `make status-displaypulse-login` or remove with `make disable-displaypulse-login`. This creates only a per-user LaunchAgent, without sudo or a persistent terminal.
+
+## PortPulse
+
+PortPulse runs entirely in the menu bar and polls TCP listeners every 5 seconds. An orange icon identifies non-loopback bindings (not necessarily Internet-accessible). Open its popover to search, filter, copy details or safely request SIGTERM with confirmation and process revalidation. Use `make test-portpulse`, `make install-portpulse`, `make refresh-portpulse`, and `make enable-portpulse-login` to start automatically at GUI login. See [PortPulse](tools/portpulse/README.md) for safety limitations.
