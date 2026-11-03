@@ -783,9 +783,13 @@ final class RunnerPulseState: ObservableObject {
 
     func start() {
         pollLocal()
-        localTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+        // .common keeps polling alive while the status-bar popover is being used
+        // and AppKit switches away from the default run-loop mode.
+        let local = Timer(timeInterval: 1.0, repeats: true) { [weak self] _ in
             self?.pollLocal()
         }
+        localTimer = local
+        RunLoop.main.add(local, forMode: .common)
         refresh(force: true) // Optional GitHub view remains available when configured.
     }
 
@@ -812,9 +816,11 @@ final class RunnerPulseState: ObservableObject {
         timer?.invalidate()
         // Idle polling is intentionally slower to minimize API usage.
         let seconds: TimeInterval = snapshot.running.isEmpty && snapshot.queued.isEmpty ? 120 : 45
-        timer = Timer.scheduledTimer(withTimeInterval: seconds, repeats: false) { [weak self] _ in
+        let next = Timer(timeInterval: seconds, repeats: false) { [weak self] _ in
             self?.refresh()
         }
+        timer = next
+        RunLoop.main.add(next, forMode: .common)
     }
 }
 
