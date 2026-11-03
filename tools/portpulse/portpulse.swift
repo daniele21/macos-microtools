@@ -176,6 +176,39 @@ private final class PortPulseFlippedView: NSView {
     override var isFlipped: Bool { true }
 }
 
+// Resolve semantic colors after the view joins its actual window appearance,
+// rather than capturing light-mode CGColors while constructing the popover.
+private final class PortPulseSurfaceView: NSView {
+    let fillColor: NSColor
+    let strokeColor: NSColor
+    let cornerRadius: CGFloat
+
+    init(fill: NSColor, stroke: NSColor, radius: CGFloat) {
+        fillColor = fill
+        strokeColor = stroke
+        cornerRadius = radius
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.cornerRadius = radius
+        layer?.borderWidth = 1
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is unsupported") }
+    override var wantsUpdateLayer: Bool { true }
+
+    override func updateLayer() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            layer?.backgroundColor = fillColor.cgColor
+            layer?.borderColor = strokeColor.cgColor
+        }
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsDisplay = true
+    }
+}
+
 // Design system for the compact menu-bar surface. Colors follow the macOS
 // appearance; orange denotes non-loopback binds, not public Internet access.
 private enum PortPulsePalette {
@@ -361,13 +394,7 @@ final class PortPulseViewController: NSViewController {
 
     private func surface(fill: NSColor, stroke: NSColor = .clear,
                          radius: CGFloat = 10) -> NSView {
-        let box = NSView()
-        box.wantsLayer = true
-        box.layer?.cornerRadius = radius
-        box.layer?.backgroundColor = fill.cgColor
-        box.layer?.borderColor = stroke.cgColor
-        box.layer?.borderWidth = 1
-        return box
+        PortPulseSurfaceView(fill: fill, stroke: stroke, radius: radius)
     }
 
     private func makeMetric(_ caption: String, icon: String,
@@ -599,6 +626,15 @@ final class PortPulseViewController: NSViewController {
         let inside = vertical(elements, spacing: selected ? 9 : 0)
         inside.alignment = .width
         inside.translatesAutoresizingMaskIntoConstraints = false
+        // Vertical NSStackView's alignment does not guarantee that its
+        // arranged children stretch to its own constrained width.
+        // Pin each row section explicitly to prevent right-justified text.
+        header.widthAnchor.constraint(equalTo: inside.widthAnchor).isActive = true
+        if selected {
+            for section in elements.dropFirst() {
+                section.widthAnchor.constraint(equalTo: inside.widthAnchor).isActive = true
+            }
+        }
         card.addSubview(inside)
         NSLayoutConstraint.activate([
             inside.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 10),
