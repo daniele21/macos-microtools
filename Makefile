@@ -225,6 +225,7 @@ test-portpulse: | bin
 		test -x bin/PortPulse.app/Contents/MacOS/PortPulse; \
 		bin/PortPulse.app/Contents/MacOS/PortPulse --list > /dev/null; \
 		bin/PortPulse.app/Contents/MacOS/PortPulse --status-icon-test; \
+		bin/PortPulse.app/Contents/MacOS/PortPulse --origin-smoke; \
 		test "$$(/usr/libexec/PlistBuddy -c 'Print :LSUIElement' bin/PortPulse.app/Contents/Info.plist)" = "true"; \
 		temp=$$(mktemp); trap 'rm -f "$$temp"' EXIT; \
 		/bin/bash tools/portpulse/login-item.sh render "$$temp"; \

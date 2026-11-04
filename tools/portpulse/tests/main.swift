@@ -65,10 +65,50 @@ struct PortPulseTests {
         expect(PortPulseCore.matches(own, filter: 1, search: "node"), "local filtered search")
         expect(!PortPulseCore.matches(own, filter: 2, search: "node"), "network filter excludes loopback")
         expect(PortPulseCore.matches(root, filter: 2, search: "::"), "network matches IPv6 host")
-        expect(PortPulseCore.likelyHTTPURL(for: own)?.absoluteString == "http://127.0.0.1:3000",
-               "browser link targets only loopback for likely web servers")
-        expect(PortPulseCore.likelyHTTPURL(for: root) == nil,
-               "system services do not get speculative browser link")
+        // The real node process title on macOS is "next-server (v16.4.2)";
+        // lsof alone reports only "node".
+        expect(PortPulseOriginCore.serviceName(lsofName: "node",
+                                               psCommand: "next-server (v16.4.2)") == "Next.js",
+               "recognize Next.js from actual process title")
+        expect(PortPulseOriginCore.serviceName(lsofName: "node",
+                                               psCommand: nil) == "node",
+               "do not guess services without evidence")
+        expect(PortPulseOriginCore.serviceName(lsofName: "postgres",
+                                               psCommand: "postgres -D data") == "postgres",
+               "preserve known process label")
+        expect(PortPulseOriginCore.elapsedLabel("10:31:34") == "10h 31m",
+               "hours and minutes")
+        expect(PortPulseOriginCore.elapsedLabel("00:40") == "40s",
+               "short runtime")
+        expect(PortPulseOriginCore.elapsedLabel("2-05:12:01") == "2g 5h",
+               "multi-day duration")
+        expect(PortPulseOriginCore.elapsedLabel("bad") == nil,
+               "malformed etime safely omitted")
+        let fields = PortPulseOriginCore.psFields("   10:31:34 next-server (v16.4.2) \n")
+        expect(fields.elapsed == "10:31:34" &&
+               fields.command == "next-server (v16.4.2)",
+               "parse ps elapsed and command as two fields")
+        expect(PortPulseOriginCore.cwdFromLsof("""
+        p24227
+        fcwd
+        n/Users/daniele/Projects/sdg-chat-activity-diagnostic-live/ui
+        """) == "/Users/daniele/Projects/sdg-chat-activity-diagnostic-live/ui",
+               "read cwd field rather than unrelated lsof text")
+        let cwd = "/Users/daniele/Projects/sdg-chat-activity-diagnostic-live/ui"
+        let projectRoot = "/Users/daniele/Projects/sdg-chat-activity-diagnostic-live"
+        let repo = PortPulseOriginCore.projectLocation(cwd: cwd, isRepository: { $0 == projectRoot })
+        expect(repo?.name == "sdg-chat-activity-diagnostic-live" && repo?.path == projectRoot,
+               "prefer real Git root above ui subdirectory")
+        let fallback = PortPulseOriginCore.projectLocation(cwd: cwd, isRepository: { _ in false })
+        expect(fallback?.name == "sdg-chat-activity-diagnostic-live",
+               "recognize development directory without .git")
+        expect(PortPulseOriginCore.projectLocation(cwd: "/System/Library/PrivateFrameworks",
+                                                   isRepository: { _ in false }) == nil,
+               "do not mislabel system processes as user projects")
+        expect(PortPulseOriginCore.projectLocation(cwd: nil,
+                                                   isRepository: { _ in false }) == nil,
+               "unavailable origins remain unavailable")
+
         var diff = PortPulseDiff()
         expect(diff.newNetworkListeners(results).isEmpty, "first scan establishes baseline")
         expect(diff.newNetworkListeners(results).isEmpty, "steady state does not alert")
@@ -77,6 +117,6 @@ struct PortPulseTests {
         expect(diff.newNetworkListeners(results + [added]).isEmpty, "no repeated alert")
         expect(diff.newNetworkListeners(results).isEmpty, "removal not an alert")
         expect(diff.newNetworkListeners(results + [added]) == [added], "reopened network listener alerts")
-        print("PortPulse parser, metrics, filters, HTTP hint, safety and diff tests passed.")
+        print("PortPulse parser, process-origin, project paths, scope, safety and diff tests passed.")
     }
 }
