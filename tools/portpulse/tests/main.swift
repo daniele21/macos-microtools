@@ -169,6 +169,11 @@ struct PortPulseTests {
         let dualGroup = PortPulseGrouping.groups(llama + [duplicateSocket])[0]
         expect(dualGroup.ports.count == 5 && dualGroup.pids.count == 5,
                "IPv4 + IPv6 socket rows do not inflate group port or PID counts")
+        expect(PortPulseGrouping.fullyVisible(group, in: llama),
+               "grouped stop is available when every port is shown")
+        expect(!PortPulseGrouping.fullyVisible(
+            PortPulseGrouping.groups(Array(llama.dropLast()))[0], in: llama
+        ), "partially filtered group must never bulk stop hidden ports")
         let filteredPort = llama.filter {
             PortPulseCore.matches($0, filter: 0, search: "8092")
         }
