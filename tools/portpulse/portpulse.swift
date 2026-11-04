@@ -97,17 +97,6 @@ struct PortPulseSummary: Equatable {
 }
 
 extension PortPulseCore {
-    static func likelyHTTPURL(for listener: PortListener) -> URL? {
-        let name = listener.command.lowercased()
-        let candidates = ["node", "next", "vite", "uvicorn", "flask",
-                          "httpd", "nginx", "caddy", "bun", "deno", "rails"]
-        guard candidates.contains(where: name.contains) else { return nil }
-        let ipv6 = listener.host.contains(":") && listener.host != "0.0.0.0"
-        let host = ipv6 ? "[::1]" : "127.0.0.1"
-        let scheme = listener.port == 443 ? "https" : "http"
-        return URL(string: "\(scheme)://\(host):\(listener.port)")
-    }
-
     static func matches(_ listener: PortListener, filter: Int, search: String) -> Bool {
         let scopeMatches = filter == 0 ||
             (filter == 1 && listener.scope == .local) ||
@@ -593,6 +582,14 @@ final class PortPulseViewController: NSViewController {
     func render(_ items: [PortListener], newExposures: [PortListener], error: String?) {
         let changed = items != listeners || lastError != error
         listeners = items
+        // Cache is strictly in-memory and scoped to currently active listener
+        // identities. Never keep a vanished PID's project origin around.
+        let alive = Set(items.map(\.identifier))
+        detailsByID = detailsByID.filter { alive.contains($0.key) }
+        if let selectedID, !alive.contains(selectedID) {
+            self.selectedID = nil
+            inspectingID = nil
+        }
         lastError = error
         let oldEvent = latestEvent
         if let first = newExposures.first { latestEvent = first }
@@ -723,7 +720,7 @@ final class PortPulseViewController: NSViewController {
         hit.isBordered = false
         hit.isTransparent = true
         hit.toolTip = "\(item.command) · \(item.address) · PID \(item.pid)"
-        hit.setAccessibilityLabel("Porta \(item.port), \(item.command), \(item.scope == .local ? "locale" : "rete"), \(selected ? "chiudi" : "apri") dettagli")
+        hit.setAccessibilityLabel("Porta \(item.port), \(info?.service ?? item.command), \(item.scope == .local ? "locale" : "rete"), \(selected ? "chiudi" : "apri") dettagli")
         header.addSubview(hit)
         hit.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
