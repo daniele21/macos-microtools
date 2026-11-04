@@ -733,6 +733,50 @@ final class PortPulseViewController: NSViewController {
     @objc private func quitClicked() { onQuit?() }
 }
 
+// Keep the ordinary status item symbol as a macOS template so the system
+// handles light/dark menu bar contrast. For a warning/error use a real,
+// non-template, pre-colored glyph: NSStatusBarButton.contentTintColor is not a
+// reliable way to override a template image's appearance on every macOS theme.
+// This affects only the icon; the listener count remains native black/white.
+private enum PortPulseStatusIcon {
+    enum State: Equatable { case normal, network, error }
+
+    static func image(for state: State) -> NSImage? {
+        if state == .normal {
+            let symbol = NSImage(systemSymbolName: "network", accessibilityDescription: "PortPulse")
+            symbol?.isTemplate = true
+            return symbol
+        }
+
+        let color: NSColor = state == .network ? .systemOrange : .systemRed
+        let image = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { rect in
+            // Small vector globe designed for 18x18 status-bar rendering.
+            // Drawing explicit strokes preserves semantic orange/red colors
+            // without forcing the status button's count to be colored.
+            color.setStroke()
+            let outer = NSBezierPath(ovalIn: rect.insetBy(dx: 2.5, dy: 2.5))
+            outer.lineWidth = 1.35
+            outer.stroke()
+
+            let meridian = NSBezierPath(ovalIn: NSRect(x: rect.midX - 3.0,
+                                                        y: rect.minY + 2.5,
+                                                        width: 6.0,
+                                                        height: rect.height - 5.0))
+            meridian.lineWidth = 1.0
+            meridian.stroke()
+
+            let equator = NSBezierPath()
+            equator.move(to: NSPoint(x: rect.minX + 2.8, y: rect.midY))
+            equator.line(to: NSPoint(x: rect.maxX - 2.8, y: rect.midY))
+            equator.lineWidth = 1.0
+            equator.stroke()
+            return true
+        }
+        image.isTemplate = false
+        return image
+    }
+}
+
 final class PortPulseApp: NSObject, NSApplicationDelegate {
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let popover = NSPopover()
@@ -742,6 +786,14 @@ final class PortPulseApp: NSObject, NSApplicationDelegate {
     private var scanning = false
     private var listeners: [PortListener] = []
     private var diff = PortPulseDiff()
+    private var iconState: PortPulseStatusIcon.State = .normal
+
+    // Only replace the image when its semantic state actually changes.
+    private func setIconState(_ state: PortPulseStatusIcon.State) {
+        guard state != iconState else { return }
+        iconState = state
+        statusItem.button?.image = PortPulseStatusIcon.image(for: state)
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         popover.behavior = .transient
@@ -755,9 +807,10 @@ final class PortPulseApp: NSObject, NSApplicationDelegate {
             self?.controller.showActionResult(launched ? "Apertura HTTP nel browser…" : "Impossibile aprire HTTP")
         }
         if let button = statusItem.button {
-            let image = NSImage(systemSymbolName: "network", accessibilityDescription: "PortPulse")
-            image?.isTemplate = true
-            button.image = image
+            button.image = PortPulseStatusIcon.image(for: .normal)
+            // Do not tint the entire button; the 41-style count should always
+            // adopt the menu bar's native readable foreground.
+            button.contentTintColor = nil
             button.title = " …"
             button.target = self
             button.action = #selector(toggle)
@@ -793,14 +846,14 @@ final class PortPulseApp: NSObject, NSApplicationDelegate {
                     let added = self.diff.newNetworkListeners(found)
                     self.controller.render(found, newExposures: added, error: nil)
                     self.statusItem.button?.title = " \(PortPulseSummary(found).total)"
-                    self.statusItem.button?.contentTintColor =
-                        found.contains(where: { $0.scope == .network }) ? .systemOrange : nil
+                    self.setIconState(found.contains(where: { $0.scope == .network })
+                        ? .network : .normal)
                     self.statusItem.button?.toolTip =
                         "PortPulse · \(PortPulseSummary(found).total) porte TCP · \(PortPulseSummary(found).network) rete"
                 case .failure(let error):
                     self.controller.render(self.listeners, newExposures: [], error: error.localizedDescription)
                     self.statusItem.button?.title = " !"
-                    self.statusItem.button?.contentTintColor = .systemRed
+                    self.setIconState(.error)
                     self.statusItem.button?.toolTip = "PortPulse: \(error.localizedDescription)"
                 }
             }
@@ -841,6 +894,21 @@ struct PortPulseMain {
     static func main() {
         if CommandLine.arguments.contains("--help") {
             print("PortPulse: native macOS TCP listener menu-bar monitor. Usage: PortPulse [--help|--list].")
+            return
+        }
+        if CommandLine.arguments.contains("--status-icon-test") {
+            let normal = PortPulseStatusIcon.image(for: .normal)
+            let warning = PortPulseStatusIcon.image(for: .network)
+            let failure = PortPulseStatusIcon.image(for: .error)
+            guard normal?.isTemplate == true,
+                  warning?.isTemplate == false,
+                  failure?.isTemplate == false,
+                  warning?.size.width == 18,
+                  failure?.size.height == 18 else {
+                fputs("PortPulse menu bar icon appearance contract failed.\n", stderr)
+                exit(EXIT_FAILURE)
+            }
+            print("PortPulse menu bar icon rendering contract passed.")
             return
         }
         if CommandLine.arguments.contains("--list") {
