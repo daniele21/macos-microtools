@@ -63,6 +63,10 @@ corrente, non sono PortPulse né servizi macOS protetti. Richiede una
 conferma esplicita che riporta porte e numero di processi; **Annulla**
 è l'azione predefinita.
 
+Se la ricerca o i filtri nascondono anche solo una porta del servizio,
+**Termina gruppo…** viene disabilitato: torna su **Tutte** e cancella la
+ricerca per gestire il gruppo completo.
+
 Prima di inviare alcun segnale, PortPulse ripete la scansione e controlla
 che TUTTI i listener selezionati siano ancora presenti, senza cambiamenti
 di PID, proprietario, porta, indirizzo o membri del gruppo. Se cambia
