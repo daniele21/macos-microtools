@@ -45,6 +45,33 @@ Se macOS non consente di leggere la cartella o il comando, il valore
 mancante resta semplicemente nascosto. I dettagli vivono solo in memoria,
 con cache di 60 secondi, e vengono cancellati al riavvio.
 
+## v0.4 — Gruppi di porte per servizio
+
+La vista è **raggruppata per servizio** per impostazione predefinita.
+Disattiva **Raggruppa per servizio** per tornare alla lista individuale.
+Il raggruppamento avviene sul nome reale del processo rilevato da lsof,
+senza lookup pesanti nel refresh. Le applicazioni runtime generiche come
+\`node\`, \`python\`, \`java\` non vengono unite fra PID diversi: possono
+appartenere a progetti differenti. Le porte IPv4/IPv6 duplicate vengono
+contate una volta sola. I gruppi con una sola porta continuano ad avere
+l'interfaccia individuale.
+
+Espandendo un gruppo, ad esempio **llama-server · 5 porte · 5 processi**,
+vedi i PID delle singole porte e il pulsante **Termina gruppo…**.
+L'azione è disponibile solo se TUTTI i processi appartengono all'utente
+corrente, non sono PortPulse né servizi macOS protetti. Richiede una
+conferma esplicita che riporta porte e numero di processi; **Annulla**
+è l'azione predefinita.
+
+Prima di inviare alcun segnale, PortPulse ripete la scansione e controlla
+che TUTTI i listener selezionati siano ancora presenti, senza cambiamenti
+di PID, proprietario, porta, indirizzo o membri del gruppo. Se cambia
+qualcosa, **non interrompe nessuno**. In caso di verifica riuscita invia
+un solo **SIGTERM per PID distinto**: non usa mai sudo o SIGKILL e non
+interpreta l'invio come prova dell'effettiva chiusura. Un processo può
+esporre anche altre porte oltre quelle visualizzate e i processi
+supervisionati possono riavviarsi.
+
 ## Menu bar
 
 The **network symbol + listener count** is visible while the app is running.
