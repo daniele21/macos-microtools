@@ -121,6 +121,96 @@ extension PortPulseCore {
     }
 }
 
+
+// Deliberately small process-origin contract. Only display facts we can
+// substantiate; "Next.js" is recognized from the actual process command,
+// while project names are derived from on-disk repository roots or user CWD.
+struct PortOriginInfo {
+    let service: String
+    let projectName: String?
+    let projectPath: String?
+    let elapsed: String?
+}
+
+enum PortPulseOriginCore {
+    static func serviceName(lsofName: String, psCommand: String?) -> String {
+        let command = (psCommand ?? "").lowercased()
+        if command.contains("next-server") ||
+           command.contains("next dev") || command.contains("next start") { return "Next.js" }
+        if command.contains("astro dev") || command.contains("/astro/") { return "Astro" }
+        if command.contains("vite") && (command.contains(" dev") || command.contains("/vite/")) { return "Vite" }
+        if command.contains("uvicorn") { return "Uvicorn" }
+        if command.contains("flask run") { return "Flask" }
+        return lsofName
+    }
+
+    // BSD ps(1) etime examples: 03:15, 10:31:34, 2-05:30:12.
+    static func elapsedLabel(_ value: String?) -> String? {
+        guard let value, !value.isEmpty else { return nil }
+        let parts = value.split(separator: "-", maxSplits: 1).map(String.init)
+        guard parts.count <= 2 else { return nil }
+        let days: Int
+        let clock: String
+        if parts.count == 2 {
+            guard let parsed = Int(parts[0]), parsed >= 0 else { return nil }
+            days = parsed
+            clock = parts[1]
+        } else {
+            days = 0
+            clock = parts[0]
+        }
+        let numbers = clock.split(separator: ":", omittingEmptySubsequences: false).compactMap { Int($0) }
+        guard numbers.count == 2 || numbers.count == 3,
+              numbers.allSatisfy({ $0 >= 0 }) else { return nil }
+        let hours = numbers.count == 3 ? numbers[0] : 0
+        let minutes = numbers.count == 3 ? numbers[1] : numbers[0]
+        let seconds = numbers.last!
+        guard minutes < 60, seconds < 60 else { return nil }
+        if days > 0 { return "\(days)g \(hours)h" }
+        if hours > 0 { return "\(hours)h \(minutes)m" }
+        if minutes > 0 { return "\(minutes)m" }
+        return "\(seconds)s"
+    }
+
+    static func psFields(_ output: String?) -> (elapsed: String?, command: String?) {
+        guard let line = output?.split(whereSeparator: \.isNewline).first else { return (nil, nil) }
+        let fields = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(maxSplits: 1, whereSeparator: \.isWhitespace)
+        guard let first = fields.first else { return (nil, nil) }
+        return (String(first), fields.count > 1 ? String(fields[1]) : nil)
+    }
+
+    static func cwdFromLsof(_ output: String?) -> String? {
+        guard let output else { return nil }
+        return output.split(whereSeparator: \.isNewline)
+            .first(where: { $0.hasPrefix("n/") })
+            .map { String($0.dropFirst()) }
+    }
+
+    static func projectLocation(
+        cwd: String?, isRepository: (String) -> Bool
+    ) -> (name: String, path: String)? {
+        guard let cwd, cwd.hasPrefix("/"), cwd != "/" else { return nil }
+        var url = URL(fileURLWithPath: cwd, isDirectory: true).standardizedFileURL
+        while url.path != "/" {
+            if isRepository(url.path) {
+                return (url.lastPathComponent, url.path)
+            }
+            url.deleteLastPathComponent()
+        }
+
+        // If .git is absent (e.g. a copied worktree), show a project-like
+        // folder only for a user's development directories. Never pretend
+        // /System, /usr or /Applications is an application project.
+        let chunks = cwd.split(separator: "/").map(String.init)
+        guard chunks.count >= 4, chunks[0] == "Users",
+              ["Projects", "Personal", "Developer", "Code"].contains(chunks[2])
+        else { return nil }
+        let name = chunks[3]
+        return (name, "/" + chunks.prefix(4).joined(separator: "/"))
+    }
+}
+
 struct PortPulseDiff {
     private(set) var initialized = false
     private var previous = Set<String>()
@@ -169,6 +259,50 @@ enum PortScanner {
             throw ScanError.unavailable("lsof non riuscito (exit \(process.terminationStatus)): \(output.prefix(180))")
         }
         return PortPulseCore.parse(output)
+    }
+}
+
+
+// Separate from PortScanner: no extra work is performed on the periodic polling
+// path. All commands execute without a shell and only on explicit row expansion.
+enum PortProcessInspector {
+    private static func command(_ executable: String, _ args: [String]) -> String? {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: executable)
+        task.arguments = args
+        let pipe = Pipe()
+        task.standardOutput = pipe
+        task.standardError = FileHandle.nullDevice
+        do { try task.run() } catch { return nil }
+        let watchdog = DispatchWorkItem {
+            if task.isRunning { task.terminate() }
+        }
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 4, execute: watchdog)
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        task.waitUntilExit()
+        watchdog.cancel()
+        guard task.terminationStatus == 0 else { return nil }
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    static func inspect(_ listener: PortListener) -> PortOriginInfo {
+        let pid = String(listener.pid)
+        let ps = PortPulseOriginCore.psFields(
+            command("/bin/ps", ["-p", pid, "-o", "etime=", "-o", "command="])
+        )
+        let cwd = PortPulseOriginCore.cwdFromLsof(
+            command("/usr/sbin/lsof", ["-nP", "-a", "-p", pid, "-d", "cwd", "-Fn"])
+        )
+        let location = PortPulseOriginCore.projectLocation(cwd: cwd) { path in
+            FileManager.default.fileExists(atPath: path + "/.git")
+        }
+        return PortOriginInfo(
+            service: PortPulseOriginCore.serviceName(lsofName: listener.command,
+                                                       psCommand: ps.command),
+            projectName: location?.name,
+            projectPath: location?.path,
+            elapsed: PortPulseOriginCore.elapsedLabel(ps.elapsed)
+        )
     }
 }
 
@@ -230,7 +364,7 @@ final class PortPulseViewController: NSViewController {
     var onRefresh: (() -> Void)?
     var onQuit: (() -> Void)?
     var onStop: ((PortListener) -> Void)?
-    var onOpen: ((URL) -> Void)?
+    var onInspect: ((PortListener) -> Void)?
 
     private let titleField = NSTextField(labelWithString: "PortPulse")
     private let updatedField = NSTextField(labelWithString: "In attesa della prima scansione")
@@ -246,6 +380,8 @@ final class PortPulseViewController: NSViewController {
     private let footerField = NSTextField(labelWithString: "TCP · ogni 5 s")
     private var listeners: [PortListener] = []
     private var selectedID: String?
+    private var detailsByID: [String: (info: PortOriginInfo, fetchedAt: Date)] = [:]
+    private var inspectingID: String?
     private var lastError: String?
     private var latestEvent: PortListener?
     private var hasLoaded = false
@@ -562,8 +698,11 @@ final class PortPulseViewController: NSViewController {
         let line = surface(fill: .separatorColor.withAlphaComponent(0.5), radius: 0)
         line.widthAnchor.constraint(equalToConstant: 1).isActive = true
         line.heightAnchor.constraint(equalToConstant: 25).isActive = true
-        let process = label(item.command, size: 12, weight: .semibold)
-        let metadata = label("\(item.host) · PID \(item.pid)", size: 10, color: .secondaryLabelColor)
+        let info = detailsByID[item.identifier]?.info
+        let process = label(info?.service ?? item.command, size: 12, weight: .semibold)
+        let subline = info?.projectName ?? "\(item.host) · PID \(item.pid)"
+        let metadata = label(subline, size: 10, color: .secondaryLabelColor)
+        metadata.toolTip = info?.projectPath ?? item.address
         let textColumn = vertical([process, metadata], spacing: 2)
         textColumn.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         let badge = makeBadge(item.scope == .local ? "Locale" : "Rete", tint: tint)
@@ -596,46 +735,33 @@ final class PortPulseViewController: NSViewController {
 
         var elements: [NSView] = [header]
         if selected {
-            let detailBox = surface(fill: .secondaryLabelColor.withAlphaComponent(0.055),
-                                    stroke: .separatorColor.withAlphaComponent(0.12), radius: 8)
-            let address = label(item.address, size: 11, weight: .medium)
-            address.lineBreakMode = .byTruncatingMiddle
-            let addressColumn = vertical([
-                label("INDIRIZZO", size: 9, color: .secondaryLabelColor),
-                address
-            ], spacing: 2)
-            let pidColumn = vertical([
-                label("PID", size: 9, color: .secondaryLabelColor),
-                label("\(item.pid)", size: 11, weight: .medium)
-            ], spacing: 2)
-            let uidColumn = vertical([
-                label("UID", size: 9, color: .secondaryLabelColor),
-                label(item.uid.map(String.init) ?? "—", size: 11, weight: .medium)
-            ], spacing: 2)
-            let detailRow = horizontal([addressColumn, NSView(), pidColumn, uidColumn], spacing: 12)
-            detailRow.translatesAutoresizingMaskIntoConstraints = false
-            detailBox.addSubview(detailRow)
-            NSLayoutConstraint.activate([
-                detailRow.leadingAnchor.constraint(equalTo: detailBox.leadingAnchor, constant: 10),
-                detailRow.trailingAnchor.constraint(equalTo: detailBox.trailingAnchor, constant: -10),
-                detailRow.topAnchor.constraint(equalTo: detailBox.topAnchor, constant: 9),
-                detailRow.bottomAnchor.constraint(equalTo: detailBox.bottomAnchor, constant: -9)
-            ])
-            elements.append(detailBox)
-
-            let copy = smallButton("Copia", symbol: "doc.on.doc", action: #selector(copyClicked))
-            var actions: [NSView] = [copy]
-            if let url = PortPulseCore.likelyHTTPURL(for: item) {
-                let open = smallButton("Apri HTTP", symbol: "arrow.up.right.square", action: #selector(openClicked))
-                open.toolTip = "Prova ad aprire \(url.absoluteString) nel browser; protocollo non verificato"
-                actions.append(open)
+            let detailText: String
+            if let info {
+                let elapsed = info.elapsed.map { "Attivo da \($0)" }
+                detailText = (["PID \(item.pid)", elapsed, item.host] as [String?])
+                    .compactMap { $0 }.joined(separator: " · ")
+            } else if inspectingID == item.identifier {
+                detailText = "Identificazione in corso…"
+            } else {
+                detailText = "PID \(item.pid) · \(item.host)"
             }
-            let stop = smallButton("Termina…", symbol: "stop.circle", action: #selector(stopClicked))
+
+            let detailLine = label(detailText, size: 11, color: .secondaryLabelColor)
+            detailLine.toolTip = item.address
+            elements.append(detailLine)
+
+            var actions: [NSView] = []
+            if let path = info?.projectPath {
+                let openProject = smallButton("Apri progetto", symbol: "folder",
+                                               action: #selector(projectClicked))
+                openProject.toolTip = path
+                actions.append(openProject)
+            }
+            let stop = smallButton("Termina…", symbol: "stop.circle",
+                                   action: #selector(stopClicked))
             stop.contentTintColor = .systemRed
             stop.isEnabled = PortPulseCore.canTerminate(item, currentUID: Int(getuid()), ownPID: getpid())
             stop.toolTip = stop.isEnabled ? "Invia SIGTERM dopo conferma" : "Solo processi verificati del tuo utente"
-            // Do not insert an unconstrained spacer: on compact AppKit
-            // popovers it can push the destructive button beyond the card.
             actions.append(stop)
             let actionRow = horizontal(actions, spacing: 7)
             elements.append(actionRow)
@@ -681,10 +807,26 @@ final class PortPulseViewController: NSViewController {
         return button
     }
 
-    // Used only by the CLI visual smoke harness. Does not run on app startup.
+    // Synthetic data is injected only in CLI snapshot mode; no real system
+    // process is inspected when producing design screenshots.
     func preview(_ items: [PortListener], expanded item: PortListener) {
         selectedID = item.identifier
+        detailsByID[item.identifier] = (
+            info: PortOriginInfo(service: "Next.js",
+                                 projectName: "sdg-chat-activity-diagnostic-live",
+                                 projectPath: "/Users/example/Projects/sdg-chat-activity-diagnostic-live",
+                                 elapsed: "10h 31m"),
+            fetchedAt: Date()
+        )
         render(items, newExposures: [], error: nil)
+    }
+
+    func inspected(_ info: PortOriginInfo, for listener: PortListener) {
+        // Ignore results from old / closed rows or processes that disappeared.
+        guard listeners.contains(listener), selectedID == listener.identifier else { return }
+        detailsByID[listener.identifier] = (info: info, fetchedAt: Date())
+        inspectingID = nil
+        rebuild()
     }
 
     @objc private func filtersChanged() { rebuild(resetScroll: true) }
@@ -692,8 +834,18 @@ final class PortPulseViewController: NSViewController {
     @objc private func rowClicked(_ sender: NSButton) {
         let filtered = visible
         guard filtered.indices.contains(sender.tag) else { return }
-        let id = filtered[sender.tag].identifier
+        let item = filtered[sender.tag]
+        let id = item.identifier
         selectedID = selectedID == id ? nil : id
+        if selectedID == id {
+            if let cached = detailsByID[id],
+               Date().timeIntervalSince(cached.fetchedAt) < 60 {
+                inspectingID = nil
+            } else {
+                inspectingID = id
+                onInspect?(item)
+            }
+        }
         rebuild()
     }
 
@@ -701,19 +853,15 @@ final class PortPulseViewController: NSViewController {
         listeners.first { $0.identifier == selectedID }
     }
 
-    @objc private func copyClicked() {
-        guard let item = selected else { return }
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(
-            "\(item.command) · PID \(item.pid) · UID \(item.uid.map(String.init) ?? "—") · TCP \(item.address)",
-            forType: .string
-        )
-        footerField.stringValue = "Dettagli copiati"
-    }
-
-    @objc private func openClicked() {
-        guard let item = selected, let url = PortPulseCore.likelyHTTPURL(for: item) else { return }
-        onOpen?(url)
+    @objc private func projectClicked() {
+        guard let item = selected, let path = detailsByID[item.identifier]?.info.projectPath else { return }
+        let url = URL(fileURLWithPath: path, isDirectory: true)
+        guard FileManager.default.fileExists(atPath: path) else {
+            footerField.stringValue = "Cartella non più disponibile"
+            return
+        }
+        let opened = NSWorkspace.shared.open(url)
+        if !opened { footerField.stringValue = "Impossibile aprire il progetto" }
     }
 
     @objc private func stopClicked() {
@@ -782,6 +930,7 @@ final class PortPulseApp: NSObject, NSApplicationDelegate {
     private let popover = NSPopover()
     private let controller = PortPulseViewController()
     private let queue = DispatchQueue(label: "com.daniele.portpulse.scan", qos: .utility)
+    private let inspectQueue = DispatchQueue(label: "com.daniele.portpulse.inspect", qos: .userInitiated)
     private var timer: Timer?
     private var scanning = false
     private var listeners: [PortListener] = []
@@ -802,9 +951,13 @@ final class PortPulseApp: NSObject, NSApplicationDelegate {
         controller.onQuit = { NSApp.terminate(nil) }
         controller.onRefresh = { [weak self] in self?.refresh() }
         controller.onStop = { [weak self] listener in self?.terminate(listener) }
-        controller.onOpen = { [weak self] url in
-            let launched = NSWorkspace.shared.open(url)
-            self?.controller.showActionResult(launched ? "Apertura HTTP nel browser…" : "Impossibile aprire HTTP")
+        controller.onInspect = { [weak self] listener in
+            self?.inspectQueue.async { [weak self] in
+                let info = PortProcessInspector.inspect(listener)
+                DispatchQueue.main.async { [weak self] in
+                    self?.controller.inspected(info, for: listener)
+                }
+            }
         }
         if let button = statusItem.button {
             button.image = PortPulseStatusIcon.image(for: .normal)
@@ -954,7 +1107,7 @@ struct PortPulseMain {
                 PortListener(pid: 2001, command: "node", uid: 501, host: "::", port: 8080)
             ]
             let ordered = (local + network).sorted { $0.port < $1.port }
-            controller.preview(ordered, expanded: network[0])
+            controller.preview(ordered, expanded: local[0])
             window.contentView?.layoutSubtreeIfNeeded()
             RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
             let bounds = controller.view.bounds
