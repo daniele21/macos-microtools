@@ -1064,6 +1064,17 @@ struct PortPulseMain {
             print("PortPulse menu bar icon rendering contract passed.")
             return
         }
+        if CommandLine.arguments.contains("--origin-smoke") {
+            let own = PortListener(pid: getpid(), command: "PortPulse",
+                                   uid: Int(getuid()), host: "127.0.0.1", port: 0)
+            let info = PortProcessInspector.inspect(own)
+            guard info.projectName != nil, info.elapsed != nil else {
+                fputs("PortPulse process origin lookup failed for current user.\n", stderr)
+                exit(EXIT_FAILURE)
+            }
+            print("PortPulse origin lookup passed: \(info.projectName ?? "")")
+            return
+        }
         if CommandLine.arguments.contains("--list") {
             do {
                 for item in try PortScanner.scan() {
