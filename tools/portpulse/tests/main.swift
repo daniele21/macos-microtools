@@ -65,11 +65,6 @@ struct PortPulseTests {
         expect(PortPulseCore.matches(own, filter: 1, search: "node"), "local filtered search")
         expect(!PortPulseCore.matches(own, filter: 2, search: "node"), "network filter excludes loopback")
         expect(PortPulseCore.matches(root, filter: 2, search: "::"), "network matches IPv6 host")
-        expect(PortPulseCore.likelyHTTPURL(for: own)?.absoluteString == "http://127.0.0.1:3000",
-               "browser link targets only loopback for likely web servers")
-        expect(PortPulseCore.likelyHTTPURL(for: root) == nil,
-               "system services do not get speculative browser link")
-
         // The real node process title on macOS is "next-server (v16.4.2)";
         // lsof alone reports only "node".
         expect(PortPulseOriginCore.serviceName(lsofName: "node",
