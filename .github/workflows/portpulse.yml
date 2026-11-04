@@ -1,0 +1,34 @@
+name: PortPulse macOS validation
+on:
+  pull_request:
+    paths:
+      - 'tools/portpulse/**'
+      - 'Makefile'
+      - '.github/workflows/portpulse.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'tools/portpulse/**'
+      - 'Makefile'
+      - '.github/workflows/portpulse.yml'
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Native build, unit tests, bundle metadata and login smoke
+        run: make test-portpulse
+      - name: Render offscreen popover screenshot
+        run: |
+          bin/PortPulse.app/Contents/MacOS/PortPulse --ui-snapshot "$RUNNER_TEMP/portpulse-v0.2.png"
+          test -s "$RUNNER_TEMP/portpulse-v0.2.png"
+          sips -g pixelWidth -g pixelHeight "$RUNNER_TEMP/portpulse-v0.2.png"
+      - name: Upload UI reference screenshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: portpulse-ui-snapshot
+          path: ${{ runner.temp }}/portpulse-v0.2.png
+          retention-days: 7

@@ -29,6 +29,15 @@ cp tools/runnerpulse/Info.plist "$HOME/.local/opt/RunnerPulse.app/Contents/Info.
 codesign --force --sign - "$HOME/.local/opt/RunnerPulse.app" || true
 echo "✓ RunnerPulse installed to $HOME/.local/opt/RunnerPulse.app"
 
+echo "==> Building PortPulse..."
+mkdir -p "$HOME/.local/opt/PortPulse.app/Contents/MacOS"
+swiftc -parse-as-library -O -framework AppKit \
+  tools/portpulse/portpulse.swift \
+  -o "$HOME/.local/opt/PortPulse.app/Contents/MacOS/PortPulse"
+cp tools/portpulse/Info.plist "$HOME/.local/opt/PortPulse.app/Contents/Info.plist"
+codesign --force --sign - "$HOME/.local/opt/PortPulse.app" || true
+echo "✓ PortPulse installed to $HOME/.local/opt/PortPulse.app"
+
 if [[ ":$PATH:" != *":${PREFIX}:"* ]]; then
     echo ""
     echo "⚠️  Note: ${PREFIX} is not in your PATH."
@@ -44,3 +53,6 @@ echo "  ${PREFIX}/menumeter &"
 echo 'To launch TerminalClip: open "$HOME/.local/opt/TerminalClip.app"'
 
 echo 'To launch RunnerPulse: open "$HOME/.local/opt/RunnerPulse.app"'
+
+echo 'To launch PortPulse: open "$HOME/.local/opt/PortPulse.app"'
+echo 'To enable PortPulse at login: make enable-portpulse-login'
