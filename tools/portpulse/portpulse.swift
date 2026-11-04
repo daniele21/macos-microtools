@@ -430,7 +430,7 @@ final class PortPulseViewController: NSViewController {
     var onRefresh: (() -> Void)?
     var onQuit: (() -> Void)?
     var onStop: ((PortListener) -> Void)?
-    var onStopGroup: ((PortGroup, Int, String) -> Void)?
+    var onStopGroup: ((PortGroup) -> Void)?
     var onInspect: ((PortListener) -> Void)?
 
     private let titleField = NSTextField(labelWithString: "PortPulse")
@@ -705,6 +705,15 @@ final class PortPulseViewController: NSViewController {
     }
 
     private var visibleGroups: [PortGroup] { PortPulseGrouping.groups(visible) }
+
+    // A filtered group may omit sockets that would also be closed by stopping
+    // its PIDs. Only allow bulk stop when ALL members are actually displayed.
+    private func isFullGroupVisible(_ group: PortGroup) -> Bool {
+        let allMembers = PortPulseGrouping.groups(listeners).first { $0.key == group.key }
+        guard let allMembers else { return false }
+        return Set(allMembers.listeners) == Set(group.listeners)
+    }
+
     private var grouped: Bool { groupToggle.state == .on }
 
     private func rebuild(resetScroll: Bool = false) {
@@ -854,11 +863,11 @@ final class PortPulseViewController: NSViewController {
             let stop = smallButton("Termina gruppo…", symbol: "stop.circle",
                                    action: #selector(stopGroupClicked))
             stop.contentTintColor = .systemRed
-            stop.isEnabled = PortPulseGrouping.canStop(group, currentUID: Int(getuid()),
-                                                       ownPID: getpid())
+            stop.isEnabled = isFullGroupVisible(group) &&
+                PortPulseGrouping.canStop(group, currentUID: Int(getuid()), ownPID: getpid())
             stop.toolTip = stop.isEnabled
                 ? "Arresta tutti i \(group.pids.count) processi dopo conferma"
-                : "Non consentito: processi di sistema, permessi insufficienti o gruppo non verificabile"
+                : "Non consentito o gruppo parzialmente filtrato: mostra tutte le porte del servizio"
             let actionRow = horizontal([stop, NSView()], spacing: 6)
             sections.append(actionRow)
         }
@@ -1064,6 +1073,7 @@ final class PortPulseViewController: NSViewController {
         guard grouped,
               let expandedGroupKey,
               let group = visibleGroups.first(where: { $0.key == expandedGroupKey }),
+              isFullGroupVisible(group),
               PortPulseGrouping.canStop(group, currentUID: Int(getuid()),
                                         ownPID: getpid()) else { return }
         let ports = group.ports.map(String.init).joined(separator: ", ")
@@ -1078,7 +1088,7 @@ final class PortPulseViewController: NSViewController {
         alert.addButton(withTitle: "Annulla")
         alert.addButton(withTitle: "Termina \(group.pids.count) processi")
         if alert.runModal() == .alertSecondButtonReturn {
-            onStopGroup?(group, filter.selectedSegment, search.stringValue)
+            onStopGroup?(group)
         }
     }
 
@@ -1204,8 +1214,8 @@ final class PortPulseApp: NSObject, NSApplicationDelegate {
         controller.onQuit = { NSApp.terminate(nil) }
         controller.onRefresh = { [weak self] in self?.refresh() }
         controller.onStop = { [weak self] listener in self?.terminate(listener) }
-        controller.onStopGroup = { [weak self] group, filter, query in
-            self?.terminateGroup(group, filter: filter, search: query)
+        controller.onStopGroup = { [weak self] group in
+            self?.terminateGroup(group)
         }
         controller.onInspect = { [weak self] listener in
             self?.inspectQueue.async { [weak self] in
@@ -1270,19 +1280,16 @@ final class PortPulseApp: NSObject, NSApplicationDelegate {
     }
 
 
-    private func terminateGroup(_ selected: PortGroup, filter: Int, search: String) {
+    private func terminateGroup(_ selected: PortGroup) {
         controller.showActionResult("Verifica di \(selected.pids.count) processi…")
         queue.async { [weak self] in
             let result: String
             do {
                 let all = try PortScanner.scan()
-                // Reproduce precisely the filter/search snapshot shown at
-                // confirmation. A changed or partially visible group aborts
-                // the whole operation BEFORE any signal is sent.
-                let displayed = all.filter {
-                    PortPulseCore.matches($0, filter: filter, search: search)
-                }
-                let fresh = PortPulseGrouping.groups(displayed)
+                // Compare against every currently listening endpoint of this
+                // service, including ports that might otherwise be hidden by
+                // a UI filter. Any membership change aborts before signaling.
+                let fresh = PortPulseGrouping.groups(all)
                     .first(where: { $0.key == selected.key })
                 guard PortPulseGrouping.validateStop(selected, against: fresh,
                                                      currentUID: Int(getuid()),
