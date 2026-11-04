@@ -254,6 +254,11 @@ enum PortPulseGrouping {
         }
     }
 
+    static func fullyVisible(_ group: PortGroup, in all: [PortListener]) -> Bool {
+        guard let allMembers = groups(all).first(where: { $0.key == group.key }) else { return false }
+        return Set(allMembers.listeners) == Set(group.listeners)
+    }
+
     static func canStop(_ group: PortGroup, currentUID: Int, ownPID: Int32) -> Bool {
         guard group.ports.count > 1,
               !protectedNames.contains(group.name.trimmingCharacters(in: .whitespaces).lowercased()),
@@ -709,9 +714,7 @@ final class PortPulseViewController: NSViewController {
     // A filtered group may omit sockets that would also be closed by stopping
     // its PIDs. Only allow bulk stop when ALL members are actually displayed.
     private func isFullGroupVisible(_ group: PortGroup) -> Bool {
-        let allMembers = PortPulseGrouping.groups(listeners).first { $0.key == group.key }
-        guard let allMembers else { return false }
-        return Set(allMembers.listeners) == Set(group.listeners)
+        PortPulseGrouping.fullyVisible(group, in: listeners)
     }
 
     private var grouped: Bool { groupToggle.state == .on }
