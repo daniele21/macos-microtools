@@ -200,6 +200,88 @@ enum PortPulseOriginCore {
     }
 }
 
+
+// Group by an actual lsof process name, not by common port numbers.
+// Interpreters such as node/python are purposely isolated by PID: different
+// development projects must never be merged into a bulk-stop group.
+struct PortGroup {
+    let key: String
+    let name: String
+    let listeners: [PortListener]
+
+    var ports: [Int] { Array(Set(listeners.map(\.port))).sorted() }
+    var pids: [Int32] { Array(Set(listeners.map(\.pid))).sorted() }
+    var isNetwork: Bool { listeners.contains { $0.scope == .network } }
+}
+
+enum PortPulseGrouping {
+    private static let genericRuntimes: Set<String> = [
+        "node", "nodejs", "python", "python3", "java", "ruby", "php", "bash",
+        "sh", "zsh", "swift", "bun", "deno", "npm", "pnpm", "yarn", "perl"
+    ]
+    private static let protectedNames: Set<String> = [
+        "controlcenter", "finder", "windowserver", "launchd", "kernel_task",
+        "mdnsresponder", "sharingd", "rapportd", "loginwindow", "syslogd",
+        "systemuiserver", "coreaudiod", "distnoted", "airportd"
+    ]
+
+    static func key(for listener: PortListener) -> String {
+        let name = listener.command.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        // Unknown or generic names are not enough evidence of one logical
+        // service when multiple interpreter processes share that name.
+        let normalized = name.isEmpty ? "unknown" : name
+        if genericRuntimes.contains(normalized) || normalized == "unknown" ||
+            normalized == "processo sconosciuto" {
+            return normalized + "|pid:\(listener.pid)"
+        }
+        return normalized
+    }
+
+    static func groups(_ listeners: [PortListener]) -> [PortGroup] {
+        let byKey = Dictionary(grouping: listeners, by: key(for:))
+        return byKey.map { key, values in
+            let sorted = values.sorted {
+                if $0.port != $1.port { return $0.port < $1.port }
+                if $0.pid != $1.pid { return $0.pid < $1.pid }
+                return $0.host < $1.host
+            }
+            return PortGroup(key: key, name: sorted[0].command, listeners: sorted)
+        }.sorted {
+            if ($0.ports.first ?? 0) != ($1.ports.first ?? 0) {
+                return ($0.ports.first ?? 0) < ($1.ports.first ?? 0)
+            }
+            return $0.key < $1.key
+        }
+    }
+
+    static func fullyVisible(_ group: PortGroup, in all: [PortListener]) -> Bool {
+        guard let allMembers = groups(all).first(where: { $0.key == group.key }) else { return false }
+        return Set(allMembers.listeners) == Set(group.listeners)
+    }
+
+    static func canStop(_ group: PortGroup, currentUID: Int, ownPID: Int32) -> Bool {
+        guard group.ports.count > 1,
+              !protectedNames.contains(group.name.trimmingCharacters(in: .whitespaces).lowercased()),
+              !group.listeners.isEmpty else { return false }
+        return group.listeners.allSatisfy {
+            key(for: $0) == group.key &&
+            PortPulseCore.canTerminate($0, currentUID: currentUID, ownPID: ownPID)
+        }
+    }
+
+    // Fail closed: if any selected endpoint disappeared, a new process joined
+    // the filtered group, or ownership changed, do not signal ANY process.
+    static func validateStop(
+        _ selected: PortGroup, against refreshed: PortGroup?,
+        currentUID: Int, ownPID: Int32
+    ) -> Bool {
+        guard canStop(selected, currentUID: currentUID, ownPID: ownPID),
+              let refreshed, selected.key == refreshed.key,
+              canStop(refreshed, currentUID: currentUID, ownPID: ownPID) else { return false }
+        return Set(selected.listeners) == Set(refreshed.listeners)
+    }
+}
+
 struct PortPulseDiff {
     private(set) var initialized = false
     private var previous = Set<String>()
@@ -353,6 +435,7 @@ final class PortPulseViewController: NSViewController {
     var onRefresh: (() -> Void)?
     var onQuit: (() -> Void)?
     var onStop: ((PortListener) -> Void)?
+    var onStopGroup: ((PortGroup) -> Void)?
     var onInspect: ((PortListener) -> Void)?
 
     private let titleField = NSTextField(labelWithString: "PortPulse")
@@ -364,11 +447,13 @@ final class PortPulseViewController: NSViewController {
     private let filter = NSSegmentedControl(labels: ["Tutte", "Locali", "Rete"],
                                             trackingMode: .selectOne, target: nil, action: nil)
     private let search = NSSearchField()
+    private let groupToggle = NSButton(checkboxWithTitle: "Raggruppa per servizio", target: nil, action: nil)
     private let rows = NSStackView()
     private let scroll = NSScrollView()
     private let footerField = NSTextField(labelWithString: "TCP · ogni 5 s")
     private var listeners: [PortListener] = []
     private var selectedID: String?
+    private var expandedGroupKey: String?
     private var detailsByID: [String: (info: PortOriginInfo, fetchedAt: Date)] = [:]
     private var inspectingID: String?
     private var lastError: String?
@@ -429,6 +514,14 @@ final class PortPulseViewController: NSViewController {
         search.sendsSearchStringImmediately = true
         search.heightAnchor.constraint(equalToConstant: 28).isActive = true
 
+        groupToggle.state = .on
+        groupToggle.controlSize = .small
+        groupToggle.font = .systemFont(ofSize: 11)
+        groupToggle.target = self
+        groupToggle.action = #selector(groupModeChanged)
+        groupToggle.toolTip = "Unisce le porte dello stesso servizio. Node e Python restano separati per processo."
+        groupToggle.setAccessibilityLabel("Raggruppa porte dello stesso servizio")
+
         eventField.font = .systemFont(ofSize: 11, weight: .medium)
         eventField.textColor = .systemOrange
         eventField.maximumNumberOfLines = 2
@@ -485,7 +578,7 @@ final class PortPulseViewController: NSViewController {
         separator.heightAnchor.constraint(equalToConstant: 1).isActive = true
 
         let content = NSStackView(views: [head, metricRow, filter, search,
-                                          eventField, scroll, separator, footer])
+                                          groupToggle, eventField, scroll, separator, footer])
         content.orientation = .vertical
         content.spacing = 10
         content.alignment = .width
@@ -590,6 +683,10 @@ final class PortPulseViewController: NSViewController {
             self.selectedID = nil
             inspectingID = nil
         }
+        if let expandedGroupKey,
+           !PortPulseGrouping.groups(items).contains(where: { $0.key == expandedGroupKey && $0.ports.count > 1 }) {
+            self.expandedGroupKey = nil
+        }
         lastError = error
         let oldEvent = latestEvent
         if let first = newExposures.first { latestEvent = first }
@@ -611,6 +708,16 @@ final class PortPulseViewController: NSViewController {
             PortPulseCore.matches($0, filter: filter.selectedSegment, search: search.stringValue)
         }
     }
+
+    private var visibleGroups: [PortGroup] { PortPulseGrouping.groups(visible) }
+
+    // A filtered group may omit sockets that would also be closed by stopping
+    // its PIDs. Only allow bulk stop when ALL members are actually displayed.
+    private func isFullGroupVisible(_ group: PortGroup) -> Bool {
+        PortPulseGrouping.fullyVisible(group, in: listeners)
+    }
+
+    private var grouped: Bool { groupToggle.state == .on }
 
     private func rebuild(resetScroll: Bool = false) {
         guard hasLoaded else { return }
@@ -660,10 +767,28 @@ final class PortPulseViewController: NSViewController {
             container.widthAnchor.constraint(equalTo: rows.widthAnchor).isActive = true
         }
 
-        for (index, item) in filtered.enumerated() {
-            let card = makeListenerCard(item, index: index)
-            rows.addArrangedSubview(card)
-            card.widthAnchor.constraint(equalTo: rows.widthAnchor).isActive = true
+        if grouped {
+            for (index, group) in visibleGroups.enumerated() {
+                if group.ports.count > 1 {
+                    let card = makeGroupCard(group, index: index)
+                    rows.addArrangedSubview(card)
+                    card.widthAnchor.constraint(equalTo: rows.widthAnchor).isActive = true
+                } else {
+                    // Singletons retain their existing one-port inspection UX.
+                    for listener in group.listeners {
+                        guard let itemIndex = filtered.firstIndex(of: listener) else { continue }
+                        let card = makeListenerCard(listener, index: itemIndex)
+                        rows.addArrangedSubview(card)
+                        card.widthAnchor.constraint(equalTo: rows.widthAnchor).isActive = true
+                    }
+                }
+            }
+        } else {
+            for (index, item) in filtered.enumerated() {
+                let card = makeListenerCard(item, index: index)
+                rows.addArrangedSubview(card)
+                card.widthAnchor.constraint(equalTo: rows.widthAnchor).isActive = true
+            }
         }
         view.layoutSubtreeIfNeeded()
         if let document = scroll.documentView {
@@ -671,6 +796,102 @@ final class PortPulseViewController: NSViewController {
             scroll.contentView.scroll(to: NSPoint(x: 0, y: resetScroll ? 0 : min(oldY, maxY)))
             scroll.reflectScrolledClipView(scroll.contentView)
         }
+    }
+
+
+    private func makeGroupCard(_ group: PortGroup, index: Int) -> NSView {
+        let expanded = group.key == expandedGroupKey
+        let tint: NSColor = group.isNetwork ? PortPulsePalette.orange : PortPulsePalette.green
+        let dark = view.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let bg = NSColor(calibratedWhite: dark ? (expanded ? 0.22 : 0.19) :
+                                             (expanded ? 0.97 : 0.95), alpha: 0.97)
+        let card = surface(fill: bg,
+                           stroke: expanded ? tint.withAlphaComponent(0.6) :
+                                              .separatorColor.withAlphaComponent(0.14), radius: 11)
+
+        let dot = surface(fill: tint, radius: 4)
+        dot.widthAnchor.constraint(equalToConstant: 8).isActive = true
+        dot.heightAnchor.constraint(equalToConstant: 8).isActive = true
+        let name = label(group.name, size: 13, weight: .semibold)
+        let countLabel = label("\(group.ports.count) porte · \(group.pids.count) processi",
+                               size: 10, color: .secondaryLabelColor)
+        let stack = vertical([name, countLabel], spacing: 2)
+        let badge = makeBadge(group.isNetwork ? "Rete" : "Locale", tint: tint)
+        let arrow = NSImageView()
+        arrow.image = NSImage(systemSymbolName: expanded ? "chevron.up" : "chevron.down",
+                              accessibilityDescription: "Dettagli gruppo")
+        arrow.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 9, weight: .medium)
+        arrow.contentTintColor = .tertiaryLabelColor
+        arrow.widthAnchor.constraint(equalToConstant: 10).isActive = true
+
+        let header = horizontal([dot, stack, NSView(), badge, arrow], spacing: 8)
+        header.translatesAutoresizingMaskIntoConstraints = false
+        header.heightAnchor.constraint(equalToConstant: 46).isActive = true
+        let hit = NSButton(title: "", target: self, action: #selector(groupClicked(_:)))
+        hit.tag = index
+        hit.isBordered = false
+        hit.isTransparent = true
+        hit.setAccessibilityLabel("\(group.name), \(group.ports.count) porte, \(group.pids.count) processi. \(expanded ? "Chiudi" : "Apri") gruppo")
+        header.addSubview(hit)
+        hit.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            hit.leadingAnchor.constraint(equalTo: header.leadingAnchor),
+            hit.trailingAnchor.constraint(equalTo: header.trailingAnchor),
+            hit.topAnchor.constraint(equalTo: header.topAnchor),
+            hit.bottomAnchor.constraint(equalTo: header.bottomAnchor)
+        ])
+
+        var sections: [NSView] = [header]
+        if expanded {
+            // One line per distinct port+PID: don't repeat dual-stack endpoints.
+            var seen = Set<String>()
+            let entries = group.listeners.filter { seen.insert("\($0.port)|\($0.pid)").inserted }
+            let children = NSStackView()
+            children.orientation = .vertical
+            children.alignment = .width
+            children.spacing = 4
+            for entry in entries {
+                let number = label(String(entry.port), size: 12, weight: .semibold)
+                number.font = .monospacedDigitSystemFont(ofSize: 12, weight: .medium)
+                number.widthAnchor.constraint(equalToConstant: 45).isActive = true
+                let metadata = label("\(entry.host) · PID \(entry.pid)", size: 10,
+                                     color: .secondaryLabelColor)
+                let line = horizontal([number, metadata, NSView()], spacing: 6)
+                line.heightAnchor.constraint(equalToConstant: 23).isActive = true
+                children.addArrangedSubview(line)
+                line.widthAnchor.constraint(equalTo: children.widthAnchor).isActive = true
+            }
+            sections.append(children)
+
+            let stop = smallButton("Termina gruppo…", symbol: "stop.circle",
+                                   action: #selector(stopGroupClicked))
+            stop.contentTintColor = .systemRed
+            stop.isEnabled = isFullGroupVisible(group) &&
+                PortPulseGrouping.canStop(group, currentUID: Int(getuid()), ownPID: getpid())
+            stop.toolTip = stop.isEnabled
+                ? "Arresta tutti i \(group.pids.count) processi dopo conferma"
+                : "Non consentito o gruppo parzialmente filtrato: mostra tutte le porte del servizio"
+            let actionRow = horizontal([stop, NSView()], spacing: 6)
+            sections.append(actionRow)
+        }
+        let body = vertical(sections, spacing: expanded ? 8 : 0)
+        body.alignment = .width
+        body.translatesAutoresizingMaskIntoConstraints = false
+        header.widthAnchor.constraint(equalTo: body.widthAnchor).isActive = true
+        if expanded {
+            // The list and footer stretch to content width; the button
+            // itself stays compact in a flexible action row.
+            sections[1].widthAnchor.constraint(equalTo: body.widthAnchor).isActive = true
+            sections[2].widthAnchor.constraint(equalTo: body.widthAnchor).isActive = true
+        }
+        card.addSubview(body)
+        NSLayoutConstraint.activate([
+            body.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 11),
+            body.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -11),
+            body.topAnchor.constraint(equalTo: card.topAnchor, constant: expanded ? 8 : 3),
+            body.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: expanded ? -11 : -3)
+        ])
+        return card
     }
 
     private func makeListenerCard(_ item: PortListener, index: Int) -> NSView {
@@ -807,14 +1028,22 @@ final class PortPulseViewController: NSViewController {
     // Synthetic data is injected only in CLI snapshot mode; no real system
     // process is inspected when producing design screenshots.
     func preview(_ items: [PortListener], expanded item: PortListener) {
-        selectedID = item.identifier
-        detailsByID[item.identifier] = (
-            info: PortOriginInfo(service: "Next.js",
-                                 projectName: "sdg-chat-activity-diagnostic-live",
-                                 projectPath: "/Users/example/Projects/sdg-chat-activity-diagnostic-live",
-                                 elapsed: "10h 31m"),
-            fetchedAt: Date()
-        )
+        if let group = PortPulseGrouping.groups(items).first(where: {
+            $0.name == "llama-server" && $0.ports.count > 1
+        }) {
+            groupToggle.state = .on
+            expandedGroupKey = group.key
+            search.stringValue = "llama"
+        } else {
+            selectedID = item.identifier
+            detailsByID[item.identifier] = (
+                info: PortOriginInfo(service: "Next.js",
+                                     projectName: "sdg-chat-activity-diagnostic-live",
+                                     projectPath: "/Users/example/Projects/sdg-chat-activity-diagnostic-live",
+                                     elapsed: "10h 31m"),
+                fetchedAt: Date()
+            )
+        }
         render(items, newExposures: [], error: nil)
     }
 
@@ -824,6 +1053,46 @@ final class PortPulseViewController: NSViewController {
         detailsByID[listener.identifier] = (info: info, fetchedAt: Date())
         inspectingID = nil
         rebuild()
+    }
+
+
+    @objc private func groupModeChanged() {
+        selectedID = nil
+        expandedGroupKey = nil
+        rebuild(resetScroll: true)
+    }
+
+    @objc private func groupClicked(_ sender: NSButton) {
+        let groups = visibleGroups
+        guard groups.indices.contains(sender.tag),
+              groups[sender.tag].ports.count > 1 else { return }
+        let key = groups[sender.tag].key
+        selectedID = nil
+        expandedGroupKey = expandedGroupKey == key ? nil : key
+        rebuild()
+    }
+
+    @objc private func stopGroupClicked() {
+        guard grouped,
+              let expandedGroupKey,
+              let group = visibleGroups.first(where: { $0.key == expandedGroupKey }),
+              isFullGroupVisible(group),
+              PortPulseGrouping.canStop(group, currentUID: Int(getuid()),
+                                        ownPID: getpid()) else { return }
+        let ports = group.ports.map(String.init).joined(separator: ", ")
+        let alert = NSAlert()
+        alert.messageText = "Terminare \(group.pids.count) processi \(group.name)?"
+        alert.informativeText =
+            "Porte selezionate: \(ports)\n" +
+            "Invierà SIGTERM ai \(group.pids.count) PID distinti. " +
+            "Può interrompere lavori in corso e altre porte degli stessi processi. " +
+            "Tutti i listener saranno ricontrollati prima dell'arresto. Nessun SIGKILL."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Annulla")
+        alert.addButton(withTitle: "Termina \(group.pids.count) processi")
+        if alert.runModal() == .alertSecondButtonReturn {
+            onStopGroup?(group)
+        }
     }
 
     @objc private func filtersChanged() { rebuild(resetScroll: true) }
@@ -948,6 +1217,9 @@ final class PortPulseApp: NSObject, NSApplicationDelegate {
         controller.onQuit = { NSApp.terminate(nil) }
         controller.onRefresh = { [weak self] in self?.refresh() }
         controller.onStop = { [weak self] listener in self?.terminate(listener) }
+        controller.onStopGroup = { [weak self] group in
+            self?.terminateGroup(group)
+        }
         controller.onInspect = { [weak self] listener in
             self?.inspectQueue.async { [weak self] in
                 let info = PortProcessInspector.inspect(listener)
@@ -1006,6 +1278,47 @@ final class PortPulseApp: NSObject, NSApplicationDelegate {
                     self.setIconState(.error)
                     self.statusItem.button?.toolTip = "PortPulse: \(error.localizedDescription)"
                 }
+            }
+        }
+    }
+
+
+    private func terminateGroup(_ selected: PortGroup) {
+        controller.showActionResult("Verifica di \(selected.pids.count) processi…")
+        queue.async { [weak self] in
+            let result: String
+            do {
+                let all = try PortScanner.scan()
+                // Compare against every currently listening endpoint of this
+                // service, including ports that might otherwise be hidden by
+                // a UI filter. Any membership change aborts before signaling.
+                let fresh = PortPulseGrouping.groups(all)
+                    .first(where: { $0.key == selected.key })
+                guard PortPulseGrouping.validateStop(selected, against: fresh,
+                                                     currentUID: Int(getuid()),
+                                                     ownPID: getpid()) else {
+                    throw PortScanner.ScanError.unavailable(
+                        "Il gruppo è cambiato o include processi non consentiti. Nessun arresto eseguito."
+                    )
+                }
+                var sent = 0
+                var failed = 0
+                for pid in selected.pids {
+                    if Darwin.kill(pid, SIGTERM) == 0 {
+                        sent += 1
+                    } else {
+                        failed += 1
+                    }
+                }
+                result = failed == 0
+                    ? "SIGTERM inviato a \(sent) processi"
+                    : "SIGTERM: \(sent) inviati, \(failed) non riusciti"
+            } catch {
+                result = error.localizedDescription
+            }
+            DispatchQueue.main.async {
+                self?.controller.showActionResult(result)
+                self?.refresh()
             }
         }
     }
@@ -1103,7 +1416,11 @@ struct PortPulseMain {
                 PortListener(pid: 71597, command: "postgres", uid: 501, host: "127.0.0.1", port: 5432),
                 PortListener(pid: 2375, command: "Google Drive", uid: 501, host: "::1", port: 7679),
                 PortListener(pid: 702, command: "Spotify", uid: 501, host: "127.0.0.1", port: 7768),
-                PortListener(pid: 28895, command: "llama-server", uid: 501, host: "127.0.0.1", port: 8091)
+                PortListener(pid: 28895, command: "llama-server", uid: 501, host: "127.0.0.1", port: 8091),
+                PortListener(pid: 30357, command: "llama-server", uid: 501, host: "127.0.0.1", port: 8092),
+                PortListener(pid: 57356, command: "llama-server", uid: 501, host: "127.0.0.1", port: 8093),
+                PortListener(pid: 57431, command: "llama-server", uid: 501, host: "127.0.0.1", port: 8094),
+                PortListener(pid: 64939, command: "llama-server", uid: 501, host: "127.0.0.1", port: 8095)
             ] + (0..<30).map {
                 PortListener(pid: Int32(9000 + $0), command: "Dev service", uid: 501,
                              host: "127.0.0.1", port: 10000 + $0)

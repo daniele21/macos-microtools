@@ -109,6 +109,84 @@ struct PortPulseTests {
                                                    isRepository: { _ in false }) == nil,
                "unavailable origins remain unavailable")
 
+
+        // Five llama-server listeners should become one compact group, with
+        // a unique PID for each model server.
+        let llama = (0..<5).map { i in
+            PortListener(pid: Int32(40000 + i), command: "llama-server", uid: 501,
+                         host: "127.0.0.1", port: 8091 + i)
+        }
+        let groups = PortPulseGrouping.groups(llama)
+        expect(groups.count == 1, "five llama servers grouped by exact service name")
+        let group = groups[0]
+        expect(group.ports == [8091, 8092, 8093, 8094, 8095],
+               "group contains all five listening ports in order")
+        expect(group.pids.count == 5, "process count deduplicates PID")
+        expect(!group.isNetwork, "loopback-only group is local")
+        expect(PortPulseGrouping.canStop(group, currentUID: 501, ownPID: 999),
+               "entire owned service group may be stopped after confirmation")
+        expect(PortPulseGrouping.validateStop(group, against: group, currentUID: 501, ownPID: 999),
+               "fresh matching group is valid")
+        expect(!PortPulseGrouping.validateStop(group, against: nil, currentUID: 501, ownPID: 999),
+               "vanished group aborts before any signals")
+        let changed = PortPulseGrouping.groups(Array(llama.dropLast()))[0]
+        expect(!PortPulseGrouping.validateStop(group, against: changed, currentUID: 501, ownPID: 999),
+               "missing listener prevents partial group termination")
+        let late = PortListener(pid: 50000, command: "llama-server", uid: 501,
+                                host: "127.0.0.1", port: 8096)
+        let expanded = PortPulseGrouping.groups(llama + [late])[0]
+        expect(!PortPulseGrouping.validateStop(group, against: expanded,
+                                               currentUID: 501, ownPID: 999),
+               "new listener must not silently join a confirmed group")
+        let otherOwner = PortListener(pid: 50001, command: "llama-server", uid: 0,
+                                      host: "127.0.0.1", port: 8097)
+        let mixed = PortPulseGrouping.groups(llama + [otherOwner])[0]
+        expect(!PortPulseGrouping.canStop(mixed, currentUID: 501, ownPID: 999),
+               "cross-UID group cannot be bulk stopped")
+        expect(!PortPulseGrouping.validateStop(group, against: mixed,
+                                               currentUID: 501, ownPID: 999),
+               "foreign UID fails entire atomic preflight")
+        let protected = PortPulseGrouping.groups([
+            PortListener(pid: 714, command: "ControlCenter", uid: 501, host: "*", port: 5000),
+            PortListener(pid: 714, command: "ControlCenter", uid: 501, host: "*", port: 7000)
+        ])[0]
+        expect(!PortPulseGrouping.canStop(protected, currentUID: 501, ownPID: 999),
+               "macOS ControlCenter group is protected")
+        let nodes = [
+            PortListener(pid: 51, command: "node", uid: 501, host: "::1", port: 4000),
+            PortListener(pid: 52, command: "node", uid: 501, host: "::1", port: 4321)
+        ]
+        expect(PortPulseGrouping.groups(nodes).count == 2,
+               "generic node runtimes must not group across unrelated projects")
+        let sameNode = [
+            PortListener(pid: 51, command: "node", uid: 501, host: "::1", port: 4000),
+            PortListener(pid: 51, command: "node", uid: 501, host: "::1", port: 4001)
+        ]
+        expect(PortPulseGrouping.groups(sameNode).count == 1,
+               "one runtime PID can group its own multiple ports")
+        let duplicateSocket = PortListener(pid: 40000, command: "llama-server", uid: 501,
+                                           host: "::1", port: 8091)
+        let dualGroup = PortPulseGrouping.groups(llama + [duplicateSocket])[0]
+        expect(dualGroup.ports.count == 5 && dualGroup.pids.count == 5,
+               "IPv4 + IPv6 socket rows do not inflate group port or PID counts")
+        expect(PortPulseGrouping.fullyVisible(group, in: llama),
+               "grouped stop is available when every port is shown")
+        expect(!PortPulseGrouping.fullyVisible(
+            PortPulseGrouping.groups(Array(llama.dropLast()))[0], in: llama
+        ), "partially filtered group must never bulk stop hidden ports")
+        let filteredPort = llama.filter {
+            PortPulseCore.matches($0, filter: 0, search: "8092")
+        }
+        expect(PortPulseGrouping.groups(filteredPort).first?.ports == [8092],
+               "search narrows group membership rather than hiding matched port")
+        expect(!PortPulseGrouping.canStop(PortPulseGrouping.groups(filteredPort)[0],
+                                          currentUID: 501, ownPID: 999),
+               "single matched port cannot trigger bulk termination")
+        let mixedScope = PortPulseGrouping.groups(llama + [
+            PortListener(pid: 50000, command: "llama-server", uid: 501, host: "*", port: 8096)
+        ])[0]
+        expect(mixedScope.isNetwork, "network warning takes precedence for group")
+
         var diff = PortPulseDiff()
         expect(diff.newNetworkListeners(results).isEmpty, "first scan establishes baseline")
         expect(diff.newNetworkListeners(results).isEmpty, "steady state does not alert")
@@ -117,6 +195,6 @@ struct PortPulseTests {
         expect(diff.newNetworkListeners(results + [added]).isEmpty, "no repeated alert")
         expect(diff.newNetworkListeners(results).isEmpty, "removal not an alert")
         expect(diff.newNetworkListeners(results + [added]) == [added], "reopened network listener alerts")
-        print("PortPulse parser, process-origin, project paths, scope, safety and diff tests passed.")
+        print("PortPulse grouping, bulk-stop preflight, parser, origin, scope, safety and diff tests passed.")
     }
 }
