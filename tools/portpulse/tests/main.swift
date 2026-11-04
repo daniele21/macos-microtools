@@ -100,9 +100,9 @@ struct PortPulseTests {
         """) == "/Users/daniele/Projects/sdg-chat-activity-diagnostic-live/ui",
                "read cwd field rather than unrelated lsof text")
         let cwd = "/Users/daniele/Projects/sdg-chat-activity-diagnostic-live/ui"
-        let root = "/Users/daniele/Projects/sdg-chat-activity-diagnostic-live"
-        let repo = PortPulseOriginCore.projectLocation(cwd: cwd, isRepository: { $0 == root })
-        expect(repo?.name == "sdg-chat-activity-diagnostic-live" && repo?.path == root,
+        let projectRoot = "/Users/daniele/Projects/sdg-chat-activity-diagnostic-live"
+        let repo = PortPulseOriginCore.projectLocation(cwd: cwd, isRepository: { $0 == projectRoot })
+        expect(repo?.name == "sdg-chat-activity-diagnostic-live" && repo?.path == projectRoot,
                "prefer real Git root above ui subdirectory")
         let fallback = PortPulseOriginCore.projectLocation(cwd: cwd, isRepository: { _ in false })
         expect(fallback?.name == "sdg-chat-activity-diagnostic-live",
