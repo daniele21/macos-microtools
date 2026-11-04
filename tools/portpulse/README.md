@@ -17,7 +17,7 @@ The opt-in login command installs a per-user LaunchAgent to open the app at logi
 Check with **make status-portpulse-login** or disable with **make disable-portpulse-login**.
 Rebuild/restart with **make refresh-portpulse**. Uninstall with **make uninstall-portpulse**.
 
-## Popover UX (v0.2)
+## Popover UX (v0.2–v0.3)
 
 The native macOS appearance follows light/dark mode and uses a compact three-part
 summary (**Totali**, **Locali**, **Rete**), a segmented scope filter, and a subtle
@@ -28,14 +28,28 @@ scans. The count is based on unique port numbers, not lsof listener rows:
 a port with local *and* network bindings is counted once in **Rete**.
 
 The network indicator is **non-loopback**, not evidence of Internet exposure.
-For likely local HTTP development servers only, **Apri HTTP** opens a loopback URL
-in the browser by explicit click; the app does not probe protocol compatibility.
+## v0.3 — Origine del servizio, senza rumore
+
+La lista mantiene solo porta, servizio e stato. Aprendo una riga, PortPulse
+recupera **su richiesta** (mai nel polling di 5 secondi) il titolo del
+processo con \`ps\` e la cartella di lavoro con \`lsof -d cwd\`.
+Se trova una directory \`.git\` risale al progetto Git; per le cartelle
+di sviluppo sotto \`~/Projects\`, \`~/Personal\`, \`~/Code\` o \`~/Developer\`
+può mostrare il nome della cartella senza inventare un repository Git.
+
+Una riga espansa mostra soltanto **nome progetto**, **PID**, **tempo
+di attività**, **indirizzo** e al massimo due azioni:
+\`Apri progetto\` (Finder) e \`Termina…\` (SIGTERM previa conferma).
+Niente UID, librerie, comando completo, pulsante copia o apri HTTP.
+Se macOS non consente di leggere la cartella o il comando, il valore
+mancante resta semplicemente nascosto. I dettagli vivono solo in memoria,
+con cache di 60 secondi, e vengono cancellati al riavvio.
 
 ## Menu bar
 
 The **network symbol + listener count** is visible while the app is running.
 Open the popover for TCP listeners with port, command, PID, bind address and UID,
-plus instant search and localhost/network filters. Select a row to copy diagnostics
+plus instant search and localhost/network filters. Select a row to inspect its process origin
 or request a controlled shutdown. Scans run on a background queue every five seconds.
 
 An orange icon means at least one **non-loopback listener**. This is **not** proof
