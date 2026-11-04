@@ -859,15 +859,18 @@ final class PortPulseViewController: NSViewController {
             stop.toolTip = stop.isEnabled
                 ? "Arresta tutti i \(group.pids.count) processi dopo conferma"
                 : "Non consentito: processi di sistema, permessi insufficienti o gruppo non verificabile"
-            sections.append(stop)
+            let actionRow = horizontal([stop, NSView()], spacing: 6)
+            sections.append(actionRow)
         }
         let body = vertical(sections, spacing: expanded ? 8 : 0)
         body.alignment = .width
         body.translatesAutoresizingMaskIntoConstraints = false
         header.widthAnchor.constraint(equalTo: body.widthAnchor).isActive = true
         if expanded {
-            // Only the list needs full-width; action button stays compact.
+            // The list and footer stretch to content width; the button
+            // itself stays compact in a flexible action row.
             sections[1].widthAnchor.constraint(equalTo: body.widthAnchor).isActive = true
+            sections[2].widthAnchor.constraint(equalTo: body.widthAnchor).isActive = true
         }
         card.addSubview(body)
         NSLayoutConstraint.activate([
@@ -1013,14 +1016,22 @@ final class PortPulseViewController: NSViewController {
     // Synthetic data is injected only in CLI snapshot mode; no real system
     // process is inspected when producing design screenshots.
     func preview(_ items: [PortListener], expanded item: PortListener) {
-        selectedID = item.identifier
-        detailsByID[item.identifier] = (
-            info: PortOriginInfo(service: "Next.js",
-                                 projectName: "sdg-chat-activity-diagnostic-live",
-                                 projectPath: "/Users/example/Projects/sdg-chat-activity-diagnostic-live",
-                                 elapsed: "10h 31m"),
-            fetchedAt: Date()
-        )
+        if let group = PortPulseGrouping.groups(items).first(where: {
+            $0.name == "llama-server" && $0.ports.count > 1
+        }) {
+            groupToggle.state = .on
+            expandedGroupKey = group.key
+            search.stringValue = "llama"
+        } else {
+            selectedID = item.identifier
+            detailsByID[item.identifier] = (
+                info: PortOriginInfo(service: "Next.js",
+                                     projectName: "sdg-chat-activity-diagnostic-live",
+                                     projectPath: "/Users/example/Projects/sdg-chat-activity-diagnostic-live",
+                                     elapsed: "10h 31m"),
+                fetchedAt: Date()
+            )
+        }
         render(items, newExposures: [], error: nil)
     }
 
@@ -1395,7 +1406,11 @@ struct PortPulseMain {
                 PortListener(pid: 71597, command: "postgres", uid: 501, host: "127.0.0.1", port: 5432),
                 PortListener(pid: 2375, command: "Google Drive", uid: 501, host: "::1", port: 7679),
                 PortListener(pid: 702, command: "Spotify", uid: 501, host: "127.0.0.1", port: 7768),
-                PortListener(pid: 28895, command: "llama-server", uid: 501, host: "127.0.0.1", port: 8091)
+                PortListener(pid: 28895, command: "llama-server", uid: 501, host: "127.0.0.1", port: 8091),
+                PortListener(pid: 30357, command: "llama-server", uid: 501, host: "127.0.0.1", port: 8092),
+                PortListener(pid: 57356, command: "llama-server", uid: 501, host: "127.0.0.1", port: 8093),
+                PortListener(pid: 57431, command: "llama-server", uid: 501, host: "127.0.0.1", port: 8094),
+                PortListener(pid: 64939, command: "llama-server", uid: 501, host: "127.0.0.1", port: 8095)
             ] + (0..<30).map {
                 PortListener(pid: Int32(9000 + $0), command: "Dev service", uid: 501,
                              host: "127.0.0.1", port: 10000 + $0)
