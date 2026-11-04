@@ -200,6 +200,83 @@ enum PortPulseOriginCore {
     }
 }
 
+
+// Group by an actual lsof process name, not by common port numbers.
+// Interpreters such as node/python are purposely isolated by PID: different
+// development projects must never be merged into a bulk-stop group.
+struct PortGroup {
+    let key: String
+    let name: String
+    let listeners: [PortListener]
+
+    var ports: [Int] { Array(Set(listeners.map(\.port))).sorted() }
+    var pids: [Int32] { Array(Set(listeners.map(\.pid))).sorted() }
+    var isNetwork: Bool { listeners.contains { $0.scope == .network } }
+}
+
+enum PortPulseGrouping {
+    private static let genericRuntimes: Set<String> = [
+        "node", "nodejs", "python", "python3", "java", "ruby", "php", "bash",
+        "sh", "zsh", "swift", "bun", "deno", "npm", "pnpm", "yarn", "perl"
+    ]
+    private static let protectedNames: Set<String> = [
+        "controlcenter", "finder", "windowserver", "launchd", "kernel_task",
+        "mdnsresponder", "sharingd", "rapportd", "loginwindow", "syslogd",
+        "systemuiserver", "coreaudiod", "distnoted", "airportd"
+    ]
+
+    static func key(for listener: PortListener) -> String {
+        let name = listener.command.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        // Unknown or generic names are not enough evidence of one logical
+        // service when multiple interpreter processes share that name.
+        let normalized = name.isEmpty ? "unknown" : name
+        if genericRuntimes.contains(normalized) || normalized == "unknown" ||
+            normalized == "processo sconosciuto" {
+            return normalized + "|pid:\(listener.pid)"
+        }
+        return normalized
+    }
+
+    static func groups(_ listeners: [PortListener]) -> [PortGroup] {
+        let byKey = Dictionary(grouping: listeners, by: key(for:))
+        return byKey.map { key, values in
+            let sorted = values.sorted {
+                if $0.port != $1.port { return $0.port < $1.port }
+                if $0.pid != $1.pid { return $0.pid < $1.pid }
+                return $0.host < $1.host
+            }
+            return PortGroup(key: key, name: sorted[0].command, listeners: sorted)
+        }.sorted {
+            if ($0.ports.first ?? 0) != ($1.ports.first ?? 0) {
+                return ($0.ports.first ?? 0) < ($1.ports.first ?? 0)
+            }
+            return $0.key < $1.key
+        }
+    }
+
+    static func canStop(_ group: PortGroup, currentUID: Int, ownPID: Int32) -> Bool {
+        guard group.ports.count > 1,
+              !protectedNames.contains(group.name.trimmingCharacters(in: .whitespaces).lowercased()),
+              !group.listeners.isEmpty else { return false }
+        return group.listeners.allSatisfy {
+            key(for: $0) == group.key &&
+            PortPulseCore.canTerminate($0, currentUID: currentUID, ownPID: ownPID)
+        }
+    }
+
+    // Fail closed: if any selected endpoint disappeared, a new process joined
+    // the filtered group, or ownership changed, do not signal ANY process.
+    static func validateStop(
+        _ selected: PortGroup, against refreshed: PortGroup?,
+        currentUID: Int, ownPID: Int32
+    ) -> Bool {
+        guard canStop(selected, currentUID: currentUID, ownPID: ownPID),
+              let refreshed, selected.key == refreshed.key,
+              canStop(refreshed, currentUID: currentUID, ownPID: ownPID) else { return false }
+        return Set(selected.listeners) == Set(refreshed.listeners)
+    }
+}
+
 struct PortPulseDiff {
     private(set) var initialized = false
     private var previous = Set<String>()
