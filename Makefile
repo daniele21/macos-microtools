@@ -10,15 +10,15 @@ bin:
 	mkdir -p bin
 
 bin/menumeter: tools/menumeter/menumeter.swift | bin
-	$(SWIFTC) $(SWIFTFLAGS) tools/menumeter/menumeter.swift -o bin/menumeter
+	$(SWIFTC) $(SWIFTFLAGS) -framework AppKit -framework IOKit tools/menumeter/menumeter.swift -o bin/menumeter
 
 .PHONY: build-menumeter test-menumeter refresh-menumeter
 
 build-menumeter: bin/menumeter
 
 test-menumeter: | bin
-	$(SWIFTC) -typecheck -framework AppKit tools/menumeter/menumeter.swift
-	$(SWIFTC) -D MENUMETER_TEST -framework AppKit tools/menumeter/menumeter.swift -o bin/menumeter-tests
+	$(SWIFTC) -typecheck -framework AppKit -framework IOKit tools/menumeter/menumeter.swift
+	$(SWIFTC) -D MENUMETER_TEST -framework AppKit -framework IOKit tools/menumeter/menumeter.swift -o bin/menumeter-tests
 	./bin/menumeter-tests
 
 # Rebuild and restart only MenuMeter, without reinstalling unrelated utilities.
@@ -30,7 +30,7 @@ refresh-menumeter:
 	@pkill -x menumeter 2>/dev/null || true
 	@sleep 1
 	@nohup $(PREFIX)/menumeter >/dev/null 2>&1 </dev/null &
-	@echo "✓ MenuMeter refreshed (v4)"
+	@echo "✓ MenuMeter refreshed (v4.2)"
 
 bin/TerminalClip.app/Contents/MacOS/TerminalClip: tools/terminalclip/terminalclip.swift tools/terminalclip/Info.plist | bin
 	mkdir -p bin/TerminalClip.app/Contents/MacOS
