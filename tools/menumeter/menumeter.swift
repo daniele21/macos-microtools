@@ -1198,6 +1198,8 @@ final class MenuMeter: NSObject, NSPopoverDelegate {
     private var lastTicks: [UInt32]?
     private var cpuHistory: [Double] = []
     private var ramHistory: [Double] = []
+    private var gpuHistory: [Double] = []
+    private var latestGPUDevices: [GPUDeviceSample] = []
     private var pressureHistory: [Int] = []
     private var swapHistory: [Double] = []
     private var latestHealth: MemoryHealthAssessment?
@@ -1223,7 +1225,7 @@ final class MenuMeter: NSObject, NSPopoverDelegate {
         super.init()
 
         if let button = status.button {
-            button.title = "CPU … · RAM …"
+            button.title = "CPU … · GPU … · RAM …"
             button.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
             button.target = self
             button.action = #selector(togglePopover)
@@ -1460,6 +1462,28 @@ final class MenuMeter: NSObject, NSPopoverDelegate {
             lines.append("CPU: \(String(format: "%.0f%%", cpu.total)) (\(cpu.cores.count) core logici) · Media 60s: \(String(format: "%.0f%%", avg))")
         }
 
+        if latestGPUDevices.isEmpty {
+            lines.append("GPU: statistiche non disponibili (IOKit PerformanceStatistics)")
+        } else {
+            for (index, device) in latestGPUDevices.enumerated() {
+                let usage = device.utilization.map { String(format: "%.0f%%", $0) } ?? "Non disponibile"
+                let cores = device.coreCount.map { "\($0) core" } ?? "core non disponibili"
+                lines.append("GPU \(index + 1): \(usage) · \(cores)")
+                if let renderer = device.renderer {
+                    lines.append("  Renderer: \(String(format: "%.0f%%", renderer))")
+                }
+                if let tiler = device.tiler {
+                    lines.append("  Tiler: \(String(format: "%.0f%%", tiler))")
+                }
+                if let inUse = device.memoryInUse {
+                    lines.append("  RAM unificata GPU in uso: \(formatBytes(inUse))")
+                }
+                if let allocated = device.memoryAllocated {
+                    lines.append("  RAM unificata GPU allocata: \(formatBytes(allocated))")
+                }
+            }
+        }
+
         let thermal = thermalStatus()
         lines.append("Stato termico: \(thermal.text)")
 
@@ -1507,6 +1531,15 @@ final class MenuMeter: NSObject, NSPopoverDelegate {
     @objc private func update() {
         let cpu = cpuSnapshot()
         let ramData = ramSnapshot()
+        let gpuDevices = GPUReader.snapshot()
+        latestGPUDevices = gpuDevices
+        if let gpuUsage = gpuDevices.compactMap({ $0.utilization }).max() {
+            gpuHistory.append(gpuUsage)
+            if gpuHistory.count > 30 {
+                gpuHistory.removeFirst(gpuHistory.count - 30)
+            }
+        }
+        dashboard.updateGPU(devices: gpuDevices, history: gpuHistory)
 
         if let cpu = cpu {
             latestCPUData = cpu
@@ -1595,10 +1628,17 @@ final class MenuMeter: NSObject, NSPopoverDelegate {
                 health: health
             )
 
-            let cpuText = cpu.map { String(format: "%.0f%%", $0.total) } ?? "…"
-            let alertGlyph = health.severity == 2 ? " ■" : (health.severity == 1 ? " ▲" : "")
-            status.button?.title = "CPU \(cpuText) · RAM \(String(format: "%.0f%%", usedPct))\(alertGlyph)"
         }
+
+        let cpuText = latestCPUData.map { String(format: "%.0f%%", $0.total) } ?? "…"
+        let gpuText = gpuDevices.compactMap { $0.utilization }.max()
+            .map { String(format: "%.0f%%", $0) } ?? "—"
+        let ramText = latestRAMStats.map { data in
+            String(format: "%.0f%%", data.total > 0 ? 100 * data.used / data.total : 0)
+        } ?? "…"
+        let severity = latestHealth?.severity ?? 0
+        let alertGlyph = severity == 2 ? " ■" : (severity == 1 ? " ▲" : "")
+        status.button?.title = "CPU \(cpuText) · GPU \(gpuText) · RAM \(ramText)\(alertGlyph)"
 
         if popover.isShown {
             fetchTopProcesses()
@@ -1612,6 +1652,21 @@ final class MenuMeter: NSObject, NSPopoverDelegate {
 
 #if MENUMETER_TEST
 // Pure-logic smoke tests: no GUI, no permission prompts, no synthetic swap usage.
+let gpu = GPUStatisticsParser.parse([
+    "Device Utilization %": 76,
+    "Renderer Utilization %": 58,
+    "Tiler Utilization %": 20,
+    "In use system memory": 1_073_741_824,
+    "Alloc system memory": 2_147_483_648
+])
+assert(gpu.utilization == 76 && gpu.renderer == 58 && gpu.tiler == 20)
+assert(gpu.memoryInUse == gib && gpu.memoryAllocated == 2 * gib)
+assert(GPUStatisticsParser.parse(["GPU Activity(%)": "27.5%"]).utilization == 27.5)
+assert(GPUStatisticsParser.parse(["Device Utilization %": -1]).utilization == nil)
+assert(GPUStatisticsParser.parse(["Device Utilization %": 120]).utilization == nil)
+assert(GPUStatisticsParser.parse(["GPU Activity(%)": "NaN"]).utilization == nil)
+assert(GPUStatisticsParser.parse([:]).utilization == nil)
+
 private let sample = ProcessSnapshotParser.parse("  123  3.5  1048576 /usr/local/bin/llama server\n\t456\t0.0\t5120\tGoogle Chrome Helper\n")
 assert(sample.count == 2)
 assert(sample[0].pid == 123 && sample[0].rss == 1_073_741_824)
