@@ -576,17 +576,24 @@ final class TopProcessRowView: NSStackView {
             iconView.heightAnchor.constraint(equalToConstant: 18)
         ])
         titleLabel.font = .systemFont(ofSize: 11.5, weight: .medium)
+        titleLabel.alignment = .left
         titleLabel.lineBreakMode = .byTruncatingTail
+        titleLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
         titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         subtitleLabel.font = .systemFont(ofSize: 9.5)
         subtitleLabel.textColor = .secondaryLabelColor
+        subtitleLabel.alignment = .left
         subtitleLabel.lineBreakMode = .byTruncatingTail
+        subtitleLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        subtitleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
+        // The name stack occupies ALL remaining row width. Otherwise its
+        // intrinsic width can shrink to a few glyphs and drift toward CPU.
         let nameColumn = NSStackView(views: [titleLabel, subtitleLabel])
         nameColumn.orientation = .vertical
         nameColumn.alignment = .width
-        nameColumn.setContentHuggingPriority(.defaultLow, for: .horizontal)
         nameColumn.spacing = 0
+        nameColumn.setContentHuggingPriority(.defaultLow, for: .horizontal)
         nameColumn.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         for (label, width) in [(cpuLabel, 63.0), (ramLabel, 87.0)] {
@@ -609,6 +616,12 @@ final class TopProcessRowView: NSStackView {
         header.distribution = .fill
         header.addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(expandClicked)))
         addArrangedSubview(header)
+        // Pin the row's content to both edges. In a vertical NSStackView,
+        // an arranged row's intrinsic width is NOT necessarily the table width.
+        header.leadingAnchor.constraint(equalTo: leadingAnchor).isActive = true
+        header.trailingAnchor.constraint(equalTo: trailingAnchor).isActive = true
+        nameColumn.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        nameColumn.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         detailsLabel.font = .systemFont(ofSize: 10.5)
         detailsLabel.textColor = .secondaryLabelColor
@@ -733,6 +746,8 @@ final class TopProcessesSectionView: NSStackView {
         headings.distribution = .fill
         headings.edgeInsets = NSEdgeInsets(top: 0, left: 26, bottom: 0, right: 0)
         addArrangedSubview(headings)
+        headings.leadingAnchor.constraint(equalTo: leadingAnchor).isActive = true
+        headings.trailingAnchor.constraint(equalTo: trailingAnchor).isActive = true
 
         statusLabel.font = .systemFont(ofSize: 11)
         statusLabel.textColor = .secondaryLabelColor
@@ -742,6 +757,10 @@ final class TopProcessesSectionView: NSStackView {
         rowsStack.alignment = .width
         rowsStack.spacing = 10
         addArrangedSubview(rowsStack)
+        // Expand the list to the full available panel width, independently
+        // of each process name's intrinsic width.
+        rowsStack.leadingAnchor.constraint(equalTo: leadingAnchor).isActive = true
+        rowsStack.trailingAnchor.constraint(equalTo: trailingAnchor).isActive = true
 
         moreButton.bezelStyle = .recessed
         moreButton.font = .systemFont(ofSize: 10.5)
@@ -775,6 +794,8 @@ final class TopProcessesSectionView: NSStackView {
         while rowViews.count < visible.count {
             let row = TopProcessRowView(frame: .zero)
             rowsStack.addArrangedSubview(row)
+            row.leadingAnchor.constraint(equalTo: rowsStack.leadingAnchor).isActive = true
+            row.trailingAnchor.constraint(equalTo: rowsStack.trailingAnchor).isActive = true
             rowViews.append(row)
         }
         for (index, row) in rowViews.enumerated() {
