@@ -137,7 +137,7 @@ private final class SoftwareDimmer {
 }
 
 private enum BrightnessRange {
-    static let minimum = 5
+    static let minimum = 1
     static let maximum = 100
 
     static func clamp(_ percent: Int) -> Int {
@@ -469,7 +469,8 @@ private struct DisplayPulseMain {
             precondition(!succeeds("abc", "100"), "nonnumeric reply is invalid")
             precondition(succeeds("50", "100"), "normal reading must be valid")
             precondition(succeeds("0", "100"), "zero current can be valid with positive maximum")
-            precondition(BrightnessRange.clamp(0) == 5, "slider must enforce 5% minimum")
+            precondition(BrightnessRange.clamp(0) == 1, "slider must enforce 1% minimum")
+            precondition(BrightnessRange.clamp(1) == 1, "1% must remain selectable")
             precondition(BrightnessRange.clamp(5) == 5, "5% must remain selectable")
             precondition(BrightnessRange.clamp(50) == 50, "midrange percentage must be unchanged")
             precondition(BrightnessRange.clamp(101) == 100, "slider must enforce 100% maximum")
