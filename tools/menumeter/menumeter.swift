@@ -902,7 +902,6 @@ final class DashboardViewController: NSViewController {
     let cpuSparklineCaption = NSTextField(labelWithString: "Ultimi 60s")
     let coresStack = NSStackView()
     var coreBarViews: [MetricBarView] = []
-    let cpuTopProcesses = TopProcessesSectionView(title: "TOP PROCESSI CPU")
     var coresExpanded: Bool = false
 
     // GPU sits below CPU, preserving two readable columns.
@@ -943,7 +942,7 @@ final class DashboardViewController: NSViewController {
     let swapActivityTitle = NSTextField(labelWithString: "I/O")
     let swapActivityValue = NSTextField(labelWithString: "↓ 0 KiB/s · ↑ 0 KiB/s")
 
-    let ramTopProcesses = TopProcessesSectionView(title: "TOP PROCESSI RAM (RSS)")
+    let topProcesses = TopProcessesSectionView(frame: .zero)
 
     // Footer
     let thermalLabel = NSTextField(labelWithString: "Stato termico: Nominale")
@@ -968,17 +967,23 @@ final class DashboardViewController: NSViewController {
         columns.distribution = .fillEqually
         columns.spacing = 20
 
-        // A fixed-height viewport keeps the footer visible on shorter displays.
-        // The NSStackView remains full-height inside the scrollable document.
+        // One scrollable document: resource columns, then full-width process table.
+        // The footer stays pinned outside the scrollable document.
         let body = NSView()
         body.translatesAutoresizingMaskIntoConstraints = false
-        body.addSubview(columns)
-        columns.translatesAutoresizingMaskIntoConstraints = false
+        let processDivider = NSBox()
+        processDivider.boxType = .separator
+        let document = NSStackView(views: [columns, processDivider, topProcesses])
+        document.orientation = .vertical
+        document.alignment = .width
+        document.spacing = 12
+        body.addSubview(document)
+        document.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
-            columns.topAnchor.constraint(equalTo: body.topAnchor),
-            columns.leadingAnchor.constraint(equalTo: body.leadingAnchor),
-            columns.trailingAnchor.constraint(equalTo: body.trailingAnchor),
-            columns.bottomAnchor.constraint(equalTo: body.bottomAnchor)
+            document.topAnchor.constraint(equalTo: body.topAnchor),
+            document.leadingAnchor.constraint(equalTo: body.leadingAnchor),
+            document.trailingAnchor.constraint(equalTo: body.trailingAnchor),
+            document.bottomAnchor.constraint(equalTo: body.bottomAnchor)
         ])
         let bodyScrollView = NSScrollView()
         bodyScrollView.drawsBackground = false
@@ -1007,7 +1012,7 @@ final class DashboardViewController: NSViewController {
             bodyScrollView.topAnchor.constraint(equalTo: root.topAnchor, constant: 14),
             bodyScrollView.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 14),
             bodyScrollView.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -14),
-            bodyScrollView.heightAnchor.constraint(equalToConstant: 400),
+            bodyScrollView.heightAnchor.constraint(equalToConstant: 430),
             body.widthAnchor.constraint(equalTo: bodyScrollView.contentView.widthAnchor),
 
             separator.topAnchor.constraint(equalTo: bodyScrollView.bottomAnchor, constant: 10),
@@ -1119,11 +1124,6 @@ final class DashboardViewController: NSViewController {
         gpuDevicesStack.leadingAnchor.constraint(equalTo: column.leadingAnchor).isActive = true
         gpuDevicesStack.trailingAnchor.constraint(equalTo: column.trailingAnchor).isActive = true
 
-        // Top CPU Processes
-        column.addArrangedSubview(cpuTopProcesses)
-        cpuTopProcesses.leadingAnchor.constraint(equalTo: column.leadingAnchor).isActive = true
-        cpuTopProcesses.trailingAnchor.constraint(equalTo: column.trailingAnchor).isActive = true
-
         return column
     }
 
@@ -1199,12 +1199,6 @@ final class DashboardViewController: NSViewController {
         column.addArrangedSubview(healthDetailLabel)
         healthStatusLabel.toolTip = "Gli avvisi richiedono pressione critica per 6s, elevata per 30s oppure swap I/O >= 5 MiB/s per 20s."
 
-        // Process-heavy apps (e.g. llama-server) deserve primary placement.
-        // With a scrollable viewport these rows remain accessible at all window sizes.
-        column.addArrangedSubview(ramTopProcesses)
-        ramTopProcesses.leadingAnchor.constraint(equalTo: column.leadingAnchor).isActive = true
-        ramTopProcesses.trailingAnchor.constraint(equalTo: column.trailingAnchor).isActive = true
-
         // RAM components are shown separately, not added together.
         for bar in [activeBar, wiredBar, compressedBar, freeBar] {
             column.addArrangedSubview(bar)
@@ -1273,7 +1267,7 @@ final class DashboardViewController: NSViewController {
         line1.distribution = .fill
 
         // Line 2: Version, Auto-start, Quit
-        let appTitle = NSTextField(labelWithString: "MenuMeter v4.2")
+        let appTitle = NSTextField(labelWithString: "MenuMeter v4.3")
         appTitle.font = .systemFont(ofSize: 11, weight: .medium)
         appTitle.textColor = .tertiaryLabelColor
         appTitle.isBezeled = false
@@ -1534,13 +1528,8 @@ final class DashboardViewController: NSViewController {
         thermalLabel.textColor = thermal.color
     }
 
-    func updateTopProcesses(
-        cpu: [(pid: pid_t, name: String, valueText: String, fraction: Double, color: NSColor, tooltip: String)],
-        ram: [(pid: pid_t, name: String, valueText: String, fraction: Double, color: NSColor, tooltip: String)],
-        error: String? = nil
-    ) {
-        cpuTopProcesses.update(processes: cpu, error: error)
-        ramTopProcesses.update(processes: ram, error: error)
+    func updateTopProcesses(samples: [ProcessSample], error: String?) {
+        topProcesses.update(samples: samples, error: error)
     }
 }
 
@@ -1568,8 +1557,7 @@ final class MenuMeter: NSObject, NSPopoverDelegate {
     private var latestCPUData: (total: Double, cores: [Double])?
     private var latestRAMStats: (total: Double, used: Double, active: Double, wired: Double, compressed: Double, free: Double, swapUsed: Double?, swapTotal: Double?, swapInRate: Double, swapOutRate: Double, pressure: (name: String, color: NSColor, level: Int)?)?
 
-    private var topCPUList: [(pid: pid_t, name: String, valueText: String, fraction: Double, color: NSColor, tooltip: String)] = []
-    private var topRAMList: [(pid: pid_t, name: String, valueText: String, fraction: Double, color: NSColor, tooltip: String)] = []
+    private var topProcessSamples: [ProcessSample] = []
     private var topProcessesError: String?
 
     private var timer: Timer?
@@ -1776,34 +1764,12 @@ final class MenuMeter: NSObject, NSPopoverDelegate {
                 errorMessage = "Impossibile eseguire ps: \(error.localizedDescription)"
             }
 
-            // Top CPU by distinct process
-            let topCPU = items.sorted { $0.cpu > $1.cpu }.prefix(3).map { item -> (pid: pid_t, name: String, valueText: String, fraction: Double, color: NSColor, tooltip: String) in
-                let app = NSRunningApplication(processIdentifier: item.pid)
-                let name = cleanProcessName(app?.localizedName ?? item.comm)
-                let pct = item.cpu
-                let color: NSColor = pct > 150.0 ? .systemOrange : .systemBlue
-                let frac = min(pct / 100.0, 1.0)
-                let tooltip = "PID \(item.pid): \(item.comm)\nCPU: \(String(format: "%.1f%%", pct))\nRAM: \(formatBytes(item.rss)) (RSS stimata)\nFai clic per aprire Monitoraggio Attività o portare in primo piano."
-                return (pid: item.pid, name: name, valueText: String(format: "%.0f%%", pct), fraction: frac, color: color, tooltip: tooltip)
-            }
-
-            // Top RAM by distinct process
-            let totalRam = Double(ProcessInfo.processInfo.physicalMemory)
-            let topRAM = items.sorted { $0.rss > $1.rss }.prefix(3).map { item -> (pid: pid_t, name: String, valueText: String, fraction: Double, color: NSColor, tooltip: String) in
-                let app = NSRunningApplication(processIdentifier: item.pid)
-                let name = cleanProcessName(app?.localizedName ?? item.comm)
-                let fraction = totalRam == 0 ? 0 : min(item.rss / totalRam, 1.0)
-                let tooltip = "PID \(item.pid): \(item.comm)\nRAM: \(formatBytes(item.rss)) (RSS stimata)\nCPU: \(String(format: "%.1f%%", item.cpu))\nFai clic per aprire Monitoraggio Attività o portare in primo piano."
-                return (pid: item.pid, name: name, valueText: formatBytes(item.rss), fraction: fraction, color: .systemCyan, tooltip: tooltip)
-            }
-
             DispatchQueue.main.async { [weak self] in
                 guard let self = self else { return }
                 self.isFetchingProcesses = false
-                self.topCPUList = Array(topCPU)
-                self.topRAMList = Array(topRAM)
+                self.topProcessSamples = items
                 self.topProcessesError = errorMessage
-                self.dashboard.updateTopProcesses(cpu: self.topCPUList, ram: self.topRAMList, error: errorMessage)
+                self.dashboard.updateTopProcesses(samples: items, error: errorMessage)
             }
         }
     }
@@ -1864,17 +1830,13 @@ final class MenuMeter: NSObject, NSPopoverDelegate {
             lines.append("Raccolta processi: \(error)")
         }
 
-        if !topCPUList.isEmpty {
-            lines.append("Top CPU:")
-            for p in topCPUList {
-                lines.append("  • \(p.name) (PID \(p.pid)): \(p.valueText)")
-            }
-        }
-
-        if !topRAMList.isEmpty {
-            lines.append("Top RAM (RSS stimata):")
-            for p in topRAMList {
-                lines.append("  • \(p.name) (PID \(p.pid)): \(p.valueText)")
+        for (label, sortCPU) in [("Top CPU", true), ("Top RAM RSS", false)] {
+            let top = ProcessRanker.make(topProcessSamples, groupApps: true, sortCPU: sortCPU).prefix(5)
+            if !top.isEmpty {
+                lines.append("\(label) (app raggruppate se identificabili):")
+                for item in top {
+                    lines.append("  • \(item.name) · CPU \(String(format: "%.1f%%", item.cpu)) · RSS \(formatBytes(item.rss)) · \(item.subtitle)")
+                }
             }
         }
 
@@ -1986,14 +1948,7 @@ final class MenuMeter: NSObject, NSPopoverDelegate {
 
         }
 
-        let cpuText = latestCPUData.map { String(format: "%.0f%%", $0.total) } ?? "…"
-        let gpuText = gpuDevices.compactMap { $0.utilization }.max()
-            .map { String(format: "%.0f%%", $0) } ?? "—"
-        let ramText = latestRAMStats.map { data in
-            String(format: "%.0f%%", data.total > 0 ? 100 * data.used / data.total : 0)
-        } ?? "…"
         let severity = latestHealth?.severity ?? 0
-        let alertGlyph = severity == 2 ? " ■" : (severity == 1 ? " ▲" : "")
         status.button?.title = MenuBarText.make(cpu: latestCPUData?.total,
             gpu: gpuDevices.compactMap { $0.utilization }.max(),
             ram: latestRAMStats.map { $0.total > 0 ? 100 * $0.used / $0.total : 0 },
