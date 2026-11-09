@@ -456,7 +456,7 @@ final class SparklineView: NSView {
 
 // MARK: - Process sampling (deterministic parsing, testable independently)
 
-private struct ProcessSample {
+struct ProcessSample {
     let pid: pid_t
     let cpu: Double
     let rss: Double
@@ -503,7 +503,7 @@ private enum ProcessIdentity {
     }
 }
 
-private struct ProcessDisplayItem {
+struct ProcessDisplayItem {
     let key: String
     let name: String
     let subtitle: String
@@ -1966,6 +1966,34 @@ final class MenuMeter: NSObject, NSPopoverDelegate {
 
 #if MENUMETER_TEST
 // Pure-logic smoke tests: no GUI, no permission prompts, no synthetic swap usage.
+let statusCases = [
+    MenuBarText.make(cpu: 8, gpu: 0, ram: 69, severity: 0),
+    MenuBarText.make(cpu: 100, gpu: 100, ram: 100, severity: 2),
+    MenuBarText.make(cpu: nil, gpu: nil, ram: nil, severity: 1),
+    MenuBarText.make(cpu: 9, gpu: 10, ram: 99, severity: 0)
+]
+assert(Set(statusCases.map { $0.count }).count == 1, "menu bar must be stable at every utilization")
+assert(statusCases[0].contains("CPU   8%"))
+assert(statusCases[1].contains("GPU 100%"))
+assert(statusCases[2].contains("GPU    —"))
+assert(ProcessIdentity.bundleRoot("/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Helper.app/Contents/MacOS/Google Chrome Helper") == "/Applications/Google Chrome.app")
+assert(ProcessIdentity.bundleRoot("/opt/homebrew/bin/python3") == nil)
+assert(ProcessIdentity.applicationName("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome") == "Google Chrome")
+assert(ProcessIdentity.executableName("/opt/homebrew/bin/python3") == "python3")
+let mockProcesses: [ProcessSample] = [
+    ProcessSample(pid: 101, cpu: 10, rss: 800 * mib, comm: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+    ProcessSample(pid: 102, cpu: 5, rss: 200 * mib, comm: "/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Helper.app/Contents/MacOS/Google Chrome Helper"),
+    ProcessSample(pid: 103, cpu: 20, rss: 100 * mib, comm: "/opt/homebrew/bin/python3"),
+    ProcessSample(pid: 104, cpu: 1, rss: 600 * mib, comm: "/opt/homebrew/bin/python3")
+]
+let grouped = ProcessRanker.make(mockProcesses, groupApps: true, sortCPU: true)
+assert(grouped.count == 3, "only processes in the same app bundle should aggregate")
+assert(grouped.first?.representativePID == 103)
+let chrome = grouped.first(where: { $0.name == "Google Chrome" })
+assert(chrome?.cpu == 15 && chrome?.rss == 1000 * mib && chrome?.members.count == 2)
+let ungrouped = ProcessRanker.make(mockProcesses, groupApps: false, sortCPU: false)
+assert(ungrouped.count == 4 && ungrouped.first?.representativePID == 101)
+
 let gpu = GPUStatisticsParser.parse([
     "Device Utilization %": 76,
     "Renderer Utilization %": 58,
