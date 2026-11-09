@@ -30,7 +30,7 @@ refresh-menumeter:
 	@pkill -x menumeter 2>/dev/null || true
 	@sleep 1
 	@nohup $(PREFIX)/menumeter >/dev/null 2>&1 </dev/null &
-	@echo "✓ MenuMeter refreshed (v4.2)"
+	@echo "✓ MenuMeter refreshed (v4.3)"
 
 bin/TerminalClip.app/Contents/MacOS/TerminalClip: tools/terminalclip/terminalclip.swift tools/terminalclip/Info.plist | bin
 	mkdir -p bin/TerminalClip.app/Contents/MacOS
