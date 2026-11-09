@@ -1,5 +1,6 @@
 import AppKit
 import Darwin
+import IOKit
 
 // MARK: - Constants & Utilities
 
@@ -88,6 +89,125 @@ private enum MemoryHealthAnalyzer {
             return MemoryHealthAssessment(status: "Pressione non disponibile", detail: "Stato non riconosciuto o lettura non riuscita.", severity: 0)
         }
         return MemoryHealthAssessment(status: "Memoria stabile", detail: "Nessun segnale persistente di difficoltà.", severity: 0)
+    }
+}
+
+// MARK: - GPU Sampler
+
+// Read-only, unprivileged GPU statistics exposed by macOS graphics drivers.
+// GPU core load is a device-level percentage; core counts are metadata, not
+// individual GPU-core utilization counters.
+struct GPUStatistics {
+    let utilization: Double?
+    let renderer: Double?
+    let tiler: Double?
+    let memoryInUse: Double?
+    let memoryAllocated: Double?
+}
+
+enum GPUStatisticsParser {
+    private static func number(_ value: Any?) -> Double? {
+        let parsed: Double
+        if let value = value as? NSNumber {
+            parsed = value.doubleValue
+        } else if let value = value as? String,
+                  let n = Double(value.replacingOccurrences(of: "%", with: "")
+                    .trimmingCharacters(in: .whitespacesAndNewlines)) {
+            parsed = n
+        } else {
+            return nil
+        }
+        return parsed.isFinite && parsed >= 0 ? parsed : nil
+    }
+
+    private static func percentage(_ keys: [String], from stats: [String: Any]) -> Double? {
+        for key in keys {
+            if let value = number(stats[key]), value <= 100 { return value }
+        }
+        return nil
+    }
+
+    private static func bytes(_ keys: [String], from stats: [String: Any]) -> Double? {
+        for key in keys {
+            if let value = number(stats[key]) { return value }
+        }
+        return nil
+    }
+
+    static func parse(_ stats: [String: Any]) -> GPUStatistics {
+        GPUStatistics(
+            utilization: percentage([
+                "Device Utilization %", "GPU Activity(%)", "GPU Activity %",
+                "GPU Utilization %", "GPU Busy %"
+            ], from: stats),
+            renderer: percentage(["Renderer Utilization %"], from: stats),
+            tiler: percentage(["Tiler Utilization %"], from: stats),
+            memoryInUse: bytes(["In use system memory", "In Use System Memory"], from: stats),
+            memoryAllocated: bytes(["Alloc system memory", "Allocated system memory"], from: stats)
+        )
+    }
+}
+
+struct GPUDeviceSample {
+    let id: UInt64
+    let utilization: Double?
+    let renderer: Double?
+    let tiler: Double?
+    let memoryInUse: Double?
+    let memoryAllocated: Double?
+    let coreCount: Int?
+}
+
+enum GPUReader {
+    // Prefer AGX on Apple Silicon. Using *either* driver class (rather than
+    // combining their results) avoids double-counting the same device.
+    static func snapshot() -> [GPUDeviceSample] {
+        let agx = readDevices(driverClass: "AGXAccelerator")
+        return agx.isEmpty ? readDevices(driverClass: "IOAccelerator") : agx
+    }
+
+    private static func readDevices(driverClass: String) -> [GPUDeviceSample] {
+        var iterator: io_iterator_t = 0
+        guard let matching = IOServiceMatching(driverClass),
+              IOServiceGetMatchingServices(kIOMainPortDefault, matching, &iterator) == KERN_SUCCESS
+        else { return [] }
+        defer { IOObjectRelease(iterator) }
+
+        var devices: [GPUDeviceSample] = []
+        var seen = Set<UInt64>()
+        while true {
+            let service = IOIteratorNext(iterator)
+            if service == 0 { break }
+            defer { IOObjectRelease(service) }
+
+            var id: UInt64 = 0
+            guard IORegistryEntryGetRegistryEntryID(service, &id) == KERN_SUCCESS,
+                  !seen.contains(id) else { continue }
+            seen.insert(id)
+
+            guard let raw = IORegistryEntryCreateCFProperty(
+                service, "PerformanceStatistics" as CFString, kCFAllocatorDefault, 0
+            )?.takeRetainedValue() as? [String: Any] else { continue }
+
+            let stats = GPUStatisticsParser.parse(raw)
+            guard stats.utilization != nil || stats.renderer != nil || stats.tiler != nil ||
+                    stats.memoryInUse != nil || stats.memoryAllocated != nil else { continue }
+
+            let coreProperty = IORegistryEntryCreateCFProperty(
+                service, "gpu-core-count" as CFString, kCFAllocatorDefault, 0
+            )?.takeRetainedValue()
+            let reportedCores = (coreProperty as? NSNumber)?.intValue
+            devices.append(GPUDeviceSample(
+                id: id,
+                utilization: stats.utilization,
+                renderer: stats.renderer,
+                tiler: stats.tiler,
+                memoryInUse: stats.memoryInUse,
+                memoryAllocated: stats.memoryAllocated,
+                coreCount: reportedCores.flatMap { $0 > 0 ? $0 : nil }
+            ))
+        }
+        return devices.sorted { $0.id < $1.id }
     }
 }
 
@@ -549,6 +669,19 @@ final class DashboardViewController: NSViewController {
     let cpuTopProcesses = TopProcessesSectionView(title: "TOP PROCESSI CPU")
     var coresExpanded: Bool = false
 
+    // GPU sits below CPU, preserving two readable columns.
+    let gpuTitleLabel = NSTextField(labelWithString: "GPU")
+    let gpuValueLabel = NSTextField(labelWithString: "—")
+    let gpuSparklineView = SparklineView()
+    let gpuSparklineCaption = NSTextField(labelWithString: "GPU · ULTIMI 60s")
+    let gpuInfoLabel = NSTextField(labelWithString: "Rilevamento GPU…")
+    let gpuMemoryLabel = NSTextField(labelWithString: "")
+    let gpuAllocatedLabel = NSTextField(labelWithString: "")
+    let gpuRendererBar = MetricBarView(title: "Renderer", valueText: "—", fraction: 0, color: .systemPurple)
+    let gpuTilerBar = MetricBarView(title: "Tiler", valueText: "—", fraction: 0, color: .systemIndigo)
+    let gpuDevicesStack = NSStackView()
+    var gpuDeviceBars: [MetricBarView] = []
+
     // RAM Section
     let ramTitleLabel = NSTextField(labelWithString: "RAM")
     let ramValueLabel = NSTextField(labelWithString: "0 / 0 GiB")
@@ -705,6 +838,51 @@ final class DashboardViewController: NSViewController {
         coresStack.leadingAnchor.constraint(equalTo: column.leadingAnchor).isActive = true
         coresStack.trailingAnchor.constraint(equalTo: column.trailingAnchor).isActive = true
 
+        // GPU section: compact history + optional driver-level details.
+        let gpuHeader = NSStackView(views: [gpuTitleLabel, gpuValueLabel])
+        gpuHeader.orientation = .horizontal
+        gpuHeader.distribution = .fill
+        gpuTitleLabel.font = .systemFont(ofSize: 13, weight: .semibold)
+        gpuValueLabel.font = .monospacedDigitSystemFont(ofSize: 13, weight: .bold)
+        gpuValueLabel.textColor = .systemPurple
+        gpuValueLabel.alignment = .right
+        column.addArrangedSubview(gpuHeader)
+        gpuHeader.leadingAnchor.constraint(equalTo: column.leadingAnchor).isActive = true
+        gpuHeader.trailingAnchor.constraint(equalTo: column.trailingAnchor).isActive = true
+
+        gpuSparklineCaption.font = .systemFont(ofSize: 10, weight: .medium)
+        gpuSparklineCaption.textColor = .tertiaryLabelColor
+        column.addArrangedSubview(gpuSparklineCaption)
+        gpuSparklineView.strokeColor = .systemPurple
+        gpuSparklineView.fillColor = NSColor.systemPurple.withAlphaComponent(0.18)
+        gpuSparklineView.translatesAutoresizingMaskIntoConstraints = false
+        gpuSparklineView.heightAnchor.constraint(equalToConstant: 32).isActive = true
+        column.addArrangedSubview(gpuSparklineView)
+        gpuSparklineView.leadingAnchor.constraint(equalTo: column.leadingAnchor).isActive = true
+        gpuSparklineView.trailingAnchor.constraint(equalTo: column.trailingAnchor).isActive = true
+
+        for label in [gpuInfoLabel, gpuMemoryLabel, gpuAllocatedLabel] {
+            label.font = .systemFont(ofSize: 11)
+            label.textColor = .secondaryLabelColor
+            label.lineBreakMode = .byTruncatingTail
+            column.addArrangedSubview(label)
+        }
+        gpuMemoryLabel.toolTip = "Memoria unificata già conteggiata nella RAM totale, non VRAM aggiuntiva."
+        gpuAllocatedLabel.toolTip = "Memoria allocata dal driver GPU: può superare quella attivamente in uso."
+        for bar in [gpuRendererBar, gpuTilerBar] {
+            bar.isHidden = true
+            column.addArrangedSubview(bar)
+            bar.leadingAnchor.constraint(equalTo: column.leadingAnchor).isActive = true
+            bar.trailingAnchor.constraint(equalTo: column.trailingAnchor).isActive = true
+        }
+        gpuDevicesStack.orientation = .vertical
+        gpuDevicesStack.alignment = .leading
+        gpuDevicesStack.spacing = 5
+        gpuDevicesStack.isHidden = true
+        column.addArrangedSubview(gpuDevicesStack)
+        gpuDevicesStack.leadingAnchor.constraint(equalTo: column.leadingAnchor).isActive = true
+        gpuDevicesStack.trailingAnchor.constraint(equalTo: column.trailingAnchor).isActive = true
+
         // Top CPU Processes
         column.addArrangedSubview(cpuTopProcesses)
         cpuTopProcesses.leadingAnchor.constraint(equalTo: column.leadingAnchor).isActive = true
@@ -859,7 +1037,7 @@ final class DashboardViewController: NSViewController {
         line1.distribution = .fill
 
         // Line 2: Version, Auto-start, Quit
-        let appTitle = NSTextField(labelWithString: "MenuMeter v4.1")
+        let appTitle = NSTextField(labelWithString: "MenuMeter v4.2")
         appTitle.font = .systemFont(ofSize: 11, weight: .medium)
         appTitle.textColor = .tertiaryLabelColor
         appTitle.isBezeled = false
@@ -947,6 +1125,83 @@ final class DashboardViewController: NSViewController {
                     valueText: String(format: "%.0f%%", val),
                     fraction: val / 100.0,
                     color: val > 90 ? .systemRed : .systemTeal
+                )
+            }
+        }
+    }
+
+    func updateGPU(devices: [GPUDeviceSample], history: [Double]) {
+        let peak = devices.compactMap { $0.utilization }.max()
+        gpuValueLabel.stringValue = peak.map { String(format: "%.0f%%", $0) } ?? "—"
+        gpuValueLabel.textColor = peak == nil ? .secondaryLabelColor : .systemPurple
+        gpuSparklineView.values = peak == nil ? [] : history
+
+        guard let device = devices.first else {
+            gpuInfoLabel.stringValue = "Statistiche GPU non disponibili"
+            gpuInfoLabel.toolTip = "Il driver non espone PerformanceStatistics via IOKit."
+            gpuMemoryLabel.isHidden = true
+            gpuAllocatedLabel.isHidden = true
+            gpuRendererBar.isHidden = true
+            gpuTilerBar.isHidden = true
+            gpuDevicesStack.isHidden = true
+            return
+        }
+
+        gpuInfoLabel.toolTip = nil
+        let totalCores = devices.compactMap { $0.coreCount }.reduce(0, +)
+        let coreText = totalCores > 0 ? " · \(totalCores) core GPU" : ""
+        gpuInfoLabel.stringValue = devices.count == 1
+            ? "GPU integrata\(coreText)"
+            : "\(devices.count) GPU rilevate\(coreText) · max"
+
+        // When more GPUs are present the summary uses the busiest device;
+        // utilization percentages must not be added together.
+        let selected = devices.first(where: { $0.utilization == peak }) ?? device
+        if let renderer = selected.renderer {
+            gpuRendererBar.isHidden = false
+            gpuRendererBar.update(valueText: String(format: "%.0f%%", renderer), fraction: renderer / 100)
+        } else {
+            gpuRendererBar.isHidden = true
+        }
+        if let tiler = selected.tiler {
+            gpuTilerBar.isHidden = false
+            gpuTilerBar.update(valueText: String(format: "%.0f%%", tiler), fraction: tiler / 100)
+        } else {
+            gpuTilerBar.isHidden = true
+        }
+        if let inUse = selected.memoryInUse {
+            gpuMemoryLabel.isHidden = false
+            gpuMemoryLabel.stringValue = "RAM GPU in uso: \(formatBytes(inUse))"
+        } else {
+            gpuMemoryLabel.isHidden = true
+        }
+        if let allocated = selected.memoryAllocated {
+            gpuAllocatedLabel.isHidden = false
+            gpuAllocatedLabel.stringValue = "RAM GPU allocata: \(formatBytes(allocated))"
+        } else {
+            gpuAllocatedLabel.isHidden = true
+        }
+
+        gpuDevicesStack.isHidden = devices.count <= 1
+        if devices.count > 1 {
+            if gpuDeviceBars.count != devices.count {
+                for bar in gpuDeviceBars {
+                    gpuDevicesStack.removeArrangedSubview(bar)
+                    bar.removeFromSuperview()
+                }
+                gpuDeviceBars = devices.indices.map { index in
+                    let bar = MetricBarView(title: "GPU \(index + 1)", valueText: "—",
+                                            fraction: 0, color: .systemPurple, height: 5.5)
+                    gpuDevicesStack.addArrangedSubview(bar)
+                    bar.leadingAnchor.constraint(equalTo: gpuDevicesStack.leadingAnchor).isActive = true
+                    bar.trailingAnchor.constraint(equalTo: gpuDevicesStack.trailingAnchor).isActive = true
+                    return bar
+                }
+            }
+            for (index, item) in devices.enumerated() {
+                gpuDeviceBars[index].update(
+                    valueText: item.utilization.map { String(format: "%.0f%%", $0) } ?? "—",
+                    fraction: (item.utilization ?? 0) / 100
                 )
             }
         }
@@ -1063,6 +1318,8 @@ final class MenuMeter: NSObject, NSPopoverDelegate {
     private var lastTicks: [UInt32]?
     private var cpuHistory: [Double] = []
     private var ramHistory: [Double] = []
+    private var gpuHistory: [Double] = []
+    private var latestGPUDevices: [GPUDeviceSample] = []
     private var pressureHistory: [Int] = []
     private var swapHistory: [Double] = []
     private var latestHealth: MemoryHealthAssessment?
@@ -1088,7 +1345,7 @@ final class MenuMeter: NSObject, NSPopoverDelegate {
         super.init()
 
         if let button = status.button {
-            button.title = "CPU … · RAM …"
+            button.title = "CPU … · GPU … · RAM …"
             button.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
             button.target = self
             button.action = #selector(togglePopover)
@@ -1325,6 +1582,28 @@ final class MenuMeter: NSObject, NSPopoverDelegate {
             lines.append("CPU: \(String(format: "%.0f%%", cpu.total)) (\(cpu.cores.count) core logici) · Media 60s: \(String(format: "%.0f%%", avg))")
         }
 
+        if latestGPUDevices.isEmpty {
+            lines.append("GPU: statistiche non disponibili (IOKit PerformanceStatistics)")
+        } else {
+            for (index, device) in latestGPUDevices.enumerated() {
+                let usage = device.utilization.map { String(format: "%.0f%%", $0) } ?? "Non disponibile"
+                let cores = device.coreCount.map { "\($0) core" } ?? "core non disponibili"
+                lines.append("GPU \(index + 1): \(usage) · \(cores)")
+                if let renderer = device.renderer {
+                    lines.append("  Renderer: \(String(format: "%.0f%%", renderer))")
+                }
+                if let tiler = device.tiler {
+                    lines.append("  Tiler: \(String(format: "%.0f%%", tiler))")
+                }
+                if let inUse = device.memoryInUse {
+                    lines.append("  RAM unificata GPU in uso: \(formatBytes(inUse))")
+                }
+                if let allocated = device.memoryAllocated {
+                    lines.append("  RAM unificata GPU allocata: \(formatBytes(allocated))")
+                }
+            }
+        }
+
         let thermal = thermalStatus()
         lines.append("Stato termico: \(thermal.text)")
 
@@ -1372,6 +1651,15 @@ final class MenuMeter: NSObject, NSPopoverDelegate {
     @objc private func update() {
         let cpu = cpuSnapshot()
         let ramData = ramSnapshot()
+        let gpuDevices = GPUReader.snapshot()
+        latestGPUDevices = gpuDevices
+        if let gpuUsage = gpuDevices.compactMap({ $0.utilization }).max() {
+            gpuHistory.append(gpuUsage)
+            if gpuHistory.count > 30 {
+                gpuHistory.removeFirst(gpuHistory.count - 30)
+            }
+        }
+        dashboard.updateGPU(devices: gpuDevices, history: gpuHistory)
 
         if let cpu = cpu {
             latestCPUData = cpu
@@ -1460,10 +1748,17 @@ final class MenuMeter: NSObject, NSPopoverDelegate {
                 health: health
             )
 
-            let cpuText = cpu.map { String(format: "%.0f%%", $0.total) } ?? "…"
-            let alertGlyph = health.severity == 2 ? " ■" : (health.severity == 1 ? " ▲" : "")
-            status.button?.title = "CPU \(cpuText) · RAM \(String(format: "%.0f%%", usedPct))\(alertGlyph)"
         }
+
+        let cpuText = latestCPUData.map { String(format: "%.0f%%", $0.total) } ?? "…"
+        let gpuText = gpuDevices.compactMap { $0.utilization }.max()
+            .map { String(format: "%.0f%%", $0) } ?? "—"
+        let ramText = latestRAMStats.map { data in
+            String(format: "%.0f%%", data.total > 0 ? 100 * data.used / data.total : 0)
+        } ?? "…"
+        let severity = latestHealth?.severity ?? 0
+        let alertGlyph = severity == 2 ? " ■" : (severity == 1 ? " ▲" : "")
+        status.button?.title = "CPU \(cpuText) · GPU \(gpuText) · RAM \(ramText)\(alertGlyph)"
 
         if popover.isShown {
             fetchTopProcesses()
@@ -1477,6 +1772,21 @@ final class MenuMeter: NSObject, NSPopoverDelegate {
 
 #if MENUMETER_TEST
 // Pure-logic smoke tests: no GUI, no permission prompts, no synthetic swap usage.
+let gpu = GPUStatisticsParser.parse([
+    "Device Utilization %": 76,
+    "Renderer Utilization %": 58,
+    "Tiler Utilization %": 20,
+    "In use system memory": 1_073_741_824,
+    "Alloc system memory": 2_147_483_648
+])
+assert(gpu.utilization == 76 && gpu.renderer == 58 && gpu.tiler == 20)
+assert(gpu.memoryInUse == gib && gpu.memoryAllocated == 2 * gib)
+assert(GPUStatisticsParser.parse(["GPU Activity(%)": "27.5%"]).utilization == 27.5)
+assert(GPUStatisticsParser.parse(["Device Utilization %": -1]).utilization == nil)
+assert(GPUStatisticsParser.parse(["Device Utilization %": 120]).utilization == nil)
+assert(GPUStatisticsParser.parse(["GPU Activity(%)": "NaN"]).utilization == nil)
+assert(GPUStatisticsParser.parse([:]).utilization == nil)
+
 private let sample = ProcessSnapshotParser.parse("  123  3.5  1048576 /usr/local/bin/llama server\n\t456\t0.0\t5120\tGoogle Chrome Helper\n")
 assert(sample.count == 2)
 assert(sample[0].pid == 123 && sample[0].rss == 1_073_741_824)

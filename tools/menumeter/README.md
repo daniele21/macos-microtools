@@ -1,10 +1,18 @@
-# MenuMeter v4.1
+# MenuMeter v4.2
 
-A minimalist, high-performance macOS menu bar monitor for CPU, RAM, Memory Pressure, Swap I/O, and Thermal State.
+A minimalist, high-performance macOS menu bar monitor for CPU, integrated GPU, RAM, Memory Pressure, Swap I/O, and Thermal State.
 
-Written in a single Swift file using 100% native Apple frameworks (AppKit, Mach, Darwin). Zero third-party dependencies, zero Electron, zero bloat (<45MB RAM footprint, 0% idle CPU).
+Written in a single Swift file using native Apple frameworks (AppKit, Mach, Darwin, IOKit). Zero third-party dependencies, zero Electron, zero bloat (<45MB RAM footprint, 0% idle CPU).
 
 ---
+
+## What changed in v4.2
+
+- **Integrated GPU next to CPU and RAM in the menu bar**: refreshed every 2 seconds using the graphics driver's native IOKit `PerformanceStatistics` (no `sudo` or spawned `ioreg` process).
+- **Compact GPU section under CPU** in the existing two-column popover: utilization and 60-second trend, optional renderer/tiler activity, GPU core count where exposed, and shared GPU memory in use / allocated.
+- **GPU data is driver-dependent**: missing metrics render `—` / `Statistiche GPU non disponibili`, *not* 0%. On systems with multiple reporting GPUs, the status bar shows the highest reported utilization; GPU percentages are not additive.
+- **Apple Silicon unified memory**: GPU memory figures overlap with the system RAM view and must not be summed or interpreted as dedicated VRAM.
+- **GPU snapshot in copied diagnostics**, with parser tests for missing, invalid, and alternate driver keys.
 
 ## What changed in v4.1
 
@@ -31,8 +39,8 @@ These are pragmatic alert thresholds, not Apple-defined pressure thresholds or d
 
 ## Features
 
-- **Dashboard Layout**: Side-by-side columns (CPU on the left, RAM on the right) with an opaque, solid-background `NSPopover`.
-- **60-Second Sparklines**: Real-time visual history for both CPU and RAM over the last 60 seconds (30 samples @ 2s).
+- **Dashboard Layout**: Side-by-side columns (CPU + GPU on the left, RAM on the right) with an opaque, solid-background `NSPopover`.
+- **60-Second Sparklines**: Real-time visual history for CPU, GPU (when available), and RAM over the last 60 seconds (30 samples @ 2s).
 - **Collapsible CPU Cores**: Shows total CPU load by default, with an expandable `▾ Core` section to inspect individual core loads.
 - **True Memory Pressure**: Directly queries kernel memory pressure (`kern.memorystatus_vm_pressure_level`) with clear states:
   - `● Normale` (Green)
@@ -64,7 +72,7 @@ make test-menumeter
 
 Or compile manually in one command:
 ```bash
-swiftc -O tools/menumeter/menumeter.swift -o ~/.local/bin/menumeter
+swiftc -O -framework AppKit -framework IOKit tools/menumeter/menumeter.swift -o ~/.local/bin/menumeter
 ~/.local/bin/menumeter &
 ```
 
