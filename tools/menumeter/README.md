@@ -1,10 +1,20 @@
-# MenuMeter v4.2
+# MenuMeter v4.3
 
 A minimalist, high-performance macOS menu bar monitor for CPU, integrated GPU, RAM, Memory Pressure, Swap I/O, and Thermal State.
 
 Written in a single Swift file using native Apple frameworks (AppKit, Mach, Darwin, IOKit). Zero third-party dependencies, zero Electron, zero bloat (<45MB RAM footprint, 0% idle CPU).
 
 ---
+
+## What changed in v4.3
+
+- **Stable menu bar width:** a fixed-size status item and fixed-width percentages mean CPU/GPU/RAM updating does not move neighboring macOS icons. Missing readings use `—`, with space reserved for RAM alerts.
+- **One full-width top-process table:** select CPU or RSS ranking and choose applications or individual processes; show the first 5 rows (up to 12 on demand). Columns display CPU and RSS side by side.
+- **Readable process names:** app bundle names (including nested helpers, such as Chromium-based browsers), executable basenames, and optional app icons; raw paths are visible when expanding a row.
+- **Expandable on-demand details:** click a row for PID(s), executable, full command fetched via `ps` only on demand, and an explicit shortcut to Activity Monitor.
+- **Safe aggregation:** only processes with the same identifiable outer `.app` bundle are grouped; independent Python/Node jobs remain separate. Per-process %CPU can exceed 100% because 100% means one logical CPU; grouped RSS is approximate due to shared pages.
+- **Lightweight monitoring retained:** CPU/GPU/RAM sample every 2 seconds; the process snapshot still refreshes at most every 6 seconds, only while the popover is visible.
+- **Added deterministic regression tests** for fixed status text widths, nested application paths, sort order, app grouping, and CLI isolation.
 
 ## What changed in v4.2
 
@@ -39,7 +49,7 @@ These are pragmatic alert thresholds, not Apple-defined pressure thresholds or d
 
 ## Features
 
-- **Dashboard Layout**: Side-by-side columns (CPU + GPU on the left, RAM on the right) with an opaque, solid-background `NSPopover`.
+- **Dashboard Layout**: Side-by-side metric columns (CPU + GPU on the left, RAM on the right), followed by a full-width Top Processi table with an opaque, solid-background `NSPopover`.
 - **60-Second Sparklines**: Real-time visual history for CPU, GPU (when available), and RAM over the last 60 seconds (30 samples @ 2s).
 - **Collapsible CPU Cores**: Shows total CPU load by default, with an expandable `▾ Core` section to inspect individual core loads.
 - **True Memory Pressure**: Directly queries kernel memory pressure (`kern.memorystatus_vm_pressure_level`) with clear states:
@@ -49,8 +59,8 @@ These are pragmatic alert thresholds, not Apple-defined pressure thresholds or d
 - **Active Swap I/O Tracking**: Distinguishes between dormant disk swap and active memory thrashing (direction-aware ↓ swap-in and ↑ swap-out rates, plus the 60s trend).
 - **Top Processes (On-Demand)**:
   - Scanned **only while the popover is open**, at most once every 6 seconds.
-  - Tracked by distinct PID with app names resolved via `NSRunningApplication`.
-  - **Interactive**: Hover for full details, click to activate the application or inspect in Activity Monitor.
+  - CPU/RAM sort, grouped app / individual process mode, stable PID association.
+  - Click a row for details; full command is retrieved on demand. Click the explicit Activity Monitor button to open it.
 - **Mac Thermal State**: Displays hardware thermal status (`ProcessInfo.thermalState`) to identify thermal throttling during builds or local AI inference.
 - **One-Click Diagnostic Snapshot**: Click `[Copia diagnostica]` to copy a structured diagnostic report straight to your clipboard.
 - **Auto-start at Login**: Built-in toggle to register/deregister a LaunchAgent in `~/Library/LaunchAgents/`.
@@ -81,8 +91,8 @@ swiftc -O -framework AppKit -framework IOKit tools/menumeter/menumeter.swift -o 
 ## Keyboard & Mouse Shortcuts
 
 - **Click status bar icon**: Toggle dashboard popover.
-- **Hover on top process**: View detailed tooltip (PID, exact CPU %, RSS RAM).
-- **Click on top process**: Bring app to front or open Activity Monitor.
+- **Click on process row**: Expand details (PID, binary, command, CPU, RSS); use the dedicated button to launch Activity Monitor.
+- **Sort and group**: Switch between CPU/RAM and App/Processi; expand the 5 initial rows to 12.
 - **Click "Copia diagnostica"**: Copies diagnostic summary to clipboard.
 - **Click "Esci"**: Terminates MenuMeter cleanly.
 
