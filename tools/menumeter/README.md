@@ -9,6 +9,7 @@ Written in a single Swift file using native Apple frameworks (AppKit, Mach, Darw
 ## What changed in v4.3
 
 - **Stable menu bar width:** a fixed-size status item and fixed-width percentages mean CPU/GPU/RAM updating does not move neighboring macOS icons. Missing readings use `—`, with space reserved for RAM alerts.
+- **At-a-glance menu bar:** small blue (CPU), purple (GPU), and green (RAM) indicators with matching values; labels remain neutral. RAM turns amber/red for sustained memory-health warnings; missing sensor data is neutral. Color is supplemental to the CPU/GPU/RAM text, never the sole identifier.
 - **One full-width top-process table:** use the footer's `Processi ↓` shortcut to jump below the metrics; select CPU or RSS ranking and choose applications or individual processes; show the first 5 rows (up to 12 on demand). Columns display CPU and RSS side by side.
 - **Readable process names:** app bundle names (including nested helpers, such as Chromium-based browsers), executable basenames, and optional app icons; raw paths are visible when expanding a row.
 - **Expandable on-demand details:** click a row for PID(s), executable, full command fetched via `ps` only on demand, and an explicit shortcut to Activity Monitor.
