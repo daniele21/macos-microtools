@@ -948,6 +948,7 @@ final class DashboardViewController: NSViewController {
     // Footer
     let thermalLabel = NSTextField(labelWithString: "Stato termico: Nominale")
     let copyDiagButton = NSButton(title: "Copia diagnostica", target: nil, action: nil)
+    let showProcessesButton = NSButton(title: "Processi ↓", target: nil, action: nil)
 
     var onQuit: (() -> Void)?
     var onToggleCores: (() -> Void)?
@@ -1263,7 +1264,12 @@ final class DashboardViewController: NSViewController {
         copyDiagButton.target = self
         copyDiagButton.action = #selector(copyDiagClicked)
 
-        let line1 = NSStackView(views: [thermalLabel, copyDiagButton])
+        showProcessesButton.bezelStyle = .recessed
+        showProcessesButton.font = .systemFont(ofSize: 11)
+        showProcessesButton.target = self
+        showProcessesButton.action = #selector(showProcessesClicked)
+
+        let line1 = NSStackView(views: [thermalLabel, showProcessesButton, copyDiagButton])
         line1.orientation = .horizontal
         line1.distribution = .fill
 
@@ -1307,6 +1313,11 @@ final class DashboardViewController: NSViewController {
 
     @objc private func loginCheckboxChanged(_ sender: NSButton) {
         LaunchAgentManager.setEnabled(sender.state == .on)
+    }
+
+    @objc private func showProcessesClicked() {
+        // The process table is below the resource charts in the scrollable pane.
+        _ = topProcesses.scrollToVisible(topProcesses.bounds)
     }
 
     @objc private func copyDiagClicked() {
