@@ -584,7 +584,8 @@ final class TopProcessRowView: NSStackView {
 
         let nameColumn = NSStackView(views: [titleLabel, subtitleLabel])
         nameColumn.orientation = .vertical
-        nameColumn.alignment = .leading
+        nameColumn.alignment = .width
+        nameColumn.setContentHuggingPriority(.defaultLow, for: .horizontal)
         nameColumn.spacing = 0
         nameColumn.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
