@@ -2085,7 +2085,25 @@ let layoutRoot = layoutProbe.view
 assert(layoutRoot.fittingSize.width >= 540)
 layoutProbe.updateTopProcesses(samples: mockProcesses, error: nil)
 assert(layoutProbe.topProcesses.arrangedSubviews.count >= 4)
-print("MenuMeter CPU/GPU/RAM and process layout tests passed")
+// Regression: short and long names must start at the same left edge, with the
+// full available name-column width rather than their own intrinsic width.
+let processTable = TopProcessesSectionView(frame: NSRect(x: 0, y: 0, width: 512, height: 460))
+processTable.update(samples: mockProcesses, error: nil)
+processTable.layoutSubtreeIfNeeded()
+let processRows = processTable.arrangedSubviews
+    .compactMap { $0 as? NSStackView }
+    .flatMap { $0.arrangedSubviews.compactMap { $0 as? TopProcessRowView } }
+assert(processRows.count == 3)
+let nameRects: [NSRect] = processRows.compactMap { row in
+    guard let header = row.arrangedSubviews.first as? NSStackView,
+          header.arrangedSubviews.count > 1,
+          let nameStack = header.arrangedSubviews[1] as? NSStackView else { return nil }
+    return nameStack.convert(nameStack.bounds, to: processTable)
+}
+assert(nameRects.count == 3)
+assert(nameRects.allSatisfy { abs($0.minX - nameRects[0].minX) < 1 })
+assert(nameRects.allSatisfy { $0.width > 180 }, "name column must not collapse")
+print("MenuMeter CPU/GPU/RAM and left-aligned process layout tests passed")
 #else
 let app = NSApplication.shared
 app.setActivationPolicy(.accessory)
