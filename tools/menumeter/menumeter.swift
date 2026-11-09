@@ -30,6 +30,72 @@ private func formatRate(_ bytesPerSec: Double) -> String {
     }
 }
 
+private enum MenuBarText {
+    // Stable width even as values cross 9/10/100%, or a sensor is unavailable.
+    static func percent(_ value: Double?) -> String {
+        guard let value = value, value.isFinite, value >= 0 else { return "   —" }
+        return String(format: "%3.0f%%", min(100, value))
+    }
+
+    static func make(cpu: Double?, gpu: Double?, ram: Double?, severity: Int) -> String {
+        let alert = severity == 2 ? "■" : (severity == 1 ? "▲" : " ")
+        return "CPU \(percent(cpu)) · GPU \(percent(gpu)) · RAM \(percent(ram)) \(alert)"
+    }
+
+    // Measure worst-case text at startup and reserve that width for the whole
+    // session. The reserved item never resizes when percentages or alerts change.
+    // A 16pt buffer covers the native NSStatusBarButton text insets.
+    static let fixedWidth: CGFloat = {
+        let cases = [
+            styled(cpu: 100, gpu: 100, ram: 100, severity: 2),
+            styled(cpu: nil, gpu: nil, ram: nil, severity: 1),
+            styled(cpu: 8, gpu: 0, ram: 69, severity: 0)
+        ]
+        let maximumTextWidth = cases.map { $0.size().width }.max() ?? 0
+        return max(CGFloat(234), ceil(maximumTextWidth + 16))
+    }()
+
+    // Colored status text is deliberately subtle: small metric dots and
+    // matching numbers, neutral labels. Names stay visible without color,
+    // including for accessibility and monochrome appearances.
+    static func styled(cpu: Double?, gpu: Double?, ram: Double?, severity: Int) -> NSAttributedString {
+        let output = NSMutableAttributedString(string: "")
+        let labelFont = NSFont.systemFont(ofSize: 10, weight: .medium)
+        let valueFont = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .semibold)
+        let dotFont = NSFont.systemFont(ofSize: 9, weight: .semibold)
+
+        func append(_ string: String, font: NSFont, color: NSColor) {
+            output.append(NSAttributedString(string: string, attributes: [
+                .font: font, .foregroundColor: color
+            ]))
+        }
+
+        let metrics: [(String, Double?, NSColor)] = [
+            ("CPU", cpu, .systemBlue),
+            ("GPU", gpu, .systemPurple),
+            ("RAM", ram, severity == 2 ? .systemRed : (severity == 1 ? .systemOrange : .systemGreen))
+        ]
+        for (index, metric) in metrics.enumerated() {
+            let (name, value, color) = metric
+            if index > 0 {
+                append("  ", font: labelFont, color: .secondaryLabelColor)
+            }
+            let available = value.map { $0.isFinite && $0 >= 0 } ?? false
+            append("●", font: dotFont, color: available ? color : .tertiaryLabelColor)
+            append(" \(name) ", font: labelFont, color: .secondaryLabelColor)
+            append(percent(value), font: valueFont,
+                   color: available ? color : .secondaryLabelColor)
+        }
+
+        // Reserve alert space even when memory pressure is normal, preventing
+        // all neighboring menu bar icons from shifting as the state changes.
+        let glyph = severity == 2 ? "■" : (severity == 1 ? "▲" : " ")
+        let alertColor: NSColor = severity == 2 ? .systemRed : .systemOrange
+        append(" \(glyph)", font: dotFont, color: alertColor)
+        return output
+    }
+}
+
 private func cleanProcessName(_ raw: String) -> String {
     var name = raw
     if let range = name.range(of: " Helper") {
@@ -443,7 +509,7 @@ final class SparklineView: NSView {
 
 // MARK: - Process sampling (deterministic parsing, testable independently)
 
-private struct ProcessSample {
+struct ProcessSample {
     let pid: pid_t
     let cpu: Double
     let rss: Double
@@ -467,136 +533,381 @@ private enum ProcessSnapshotParser {
     }
 }
 
-// MARK: - Top Process Row & Section (Cliccabile)
+// MARK: - Process presentation: accurate per-PID data, optional app grouping
 
-final class TopProcessRowView: NSView {
-    private let nameLabel = NSTextField(labelWithString: "")
-    private let valueLabel = NSTextField(labelWithString: "")
-    private let trackView = ProgressTrackView(height: 3.5)
-    private var currentPID: pid_t?
-
-    override init(frame: NSRect = .zero) {
-        super.init(frame: frame)
-        wantsLayer = true
-
-        nameLabel.font = .systemFont(ofSize: 11, weight: .medium)
-        nameLabel.textColor = .labelColor
-        nameLabel.lineBreakMode = .byTruncatingTail
-        nameLabel.isBezeled = false
-        nameLabel.drawsBackground = false
-        nameLabel.isEditable = false
-        nameLabel.isSelectable = false
-        nameLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-
-        valueLabel.font = .monospacedDigitSystemFont(ofSize: 10.5, weight: .regular)
-        valueLabel.textColor = .secondaryLabelColor
-        valueLabel.alignment = .right
-        valueLabel.isBezeled = false
-        valueLabel.drawsBackground = false
-        valueLabel.isEditable = false
-        valueLabel.isSelectable = false
-        valueLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
-        valueLabel.setContentHuggingPriority(.required, for: .horizontal)
-
-        let labels = NSStackView(views: [nameLabel, valueLabel])
-        labels.orientation = .horizontal
-        labels.distribution = .fill
-
-        addSubview(labels)
-        addSubview(trackView)
-
-        labels.translatesAutoresizingMaskIntoConstraints = false
-        trackView.translatesAutoresizingMaskIntoConstraints = false
-
-        NSLayoutConstraint.activate([
-            labels.topAnchor.constraint(equalTo: topAnchor),
-            labels.leadingAnchor.constraint(equalTo: leadingAnchor),
-            labels.trailingAnchor.constraint(equalTo: trailingAnchor),
-
-            trackView.topAnchor.constraint(equalTo: labels.bottomAnchor, constant: 2),
-            trackView.leadingAnchor.constraint(equalTo: leadingAnchor),
-            trackView.trailingAnchor.constraint(equalTo: trailingAnchor),
-            trackView.heightAnchor.constraint(equalToConstant: 3.5),
-            trackView.bottomAnchor.constraint(equalTo: bottomAnchor)
-        ])
+private enum ProcessIdentity {
+    // The first .app is the outer application (Chrome Helpers have nested bundles).
+    static func bundleRoot(_ raw: String) -> String? {
+        guard raw.hasPrefix("/"),
+              let range = raw.range(of: ".app/", options: .caseInsensitive) else { return nil }
+        return String(raw[..<range.lowerBound]) + ".app"
     }
 
-    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-
-    func update(pid: pid_t, name: String, valueText: String, fraction: Double, color: NSColor, tooltipText: String) {
-        self.currentPID = pid
-        nameLabel.stringValue = name
-        valueLabel.stringValue = valueText
-        trackView.fraction = fraction
-        trackView.fillColor = color
-        self.toolTip = tooltipText
+    static func executableName(_ raw: String) -> String {
+        let name = raw.hasPrefix("/") ? URL(fileURLWithPath: raw).lastPathComponent : raw
+        return name.isEmpty ? "Processo sconosciuto" : name
     }
 
-    override func mouseDown(with event: NSEvent) {
-        super.mouseDown(with: event)
-        guard let pid = currentPID else { return }
-        if let app = NSRunningApplication(processIdentifier: pid), app.activationPolicy == .regular {
-            app.activate()
-        } else {
-            NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/Utilities/Activity Monitor.app"))
+    static func applicationName(_ raw: String) -> String {
+        if let root = bundleRoot(raw) {
+            return URL(fileURLWithPath: root).deletingPathExtension().lastPathComponent
+        }
+        return cleanProcessName(executableName(raw))
+    }
+}
+
+struct ProcessDisplayItem {
+    let key: String
+    let name: String
+    let subtitle: String
+    let cpu: Double
+    let rss: Double
+    let members: [ProcessSample]
+    let appPath: String?
+    let isGroup: Bool
+    var representativePID: pid_t { members.first?.pid ?? 0 }
+}
+
+private enum ProcessRanker {
+    static func make(_ items: [ProcessSample], groupApps: Bool, sortCPU: Bool) -> [ProcessDisplayItem] {
+        var buckets: [String: [ProcessSample]] = [:]
+        for item in items {
+            // Do not merge unrelated CLI tools just because they both run "python".
+            let groupKey = groupApps ? ProcessIdentity.bundleRoot(item.comm).map { "app:\($0)" } : nil
+            buckets[groupKey ?? "pid:\(item.pid)", default: []].append(item)
+        }
+        let rows = buckets.map { key, members -> ProcessDisplayItem in
+            let members = members.sorted {
+                if $0.cpu == $1.cpu { return $0.pid < $1.pid }
+                return $0.cpu > $1.cpu
+            }
+            let first = members[0]
+            let appPath = ProcessIdentity.bundleRoot(first.comm)
+            let aggregated = members.count > 1
+            let title = groupApps ? ProcessIdentity.applicationName(first.comm)
+                                  : ProcessIdentity.executableName(first.comm)
+            let subtitle = aggregated ? "\(members.count) processi · RSS stimata"
+                                      : "PID \(first.pid)"
+            return ProcessDisplayItem(key: key, name: title, subtitle: subtitle,
+                                      cpu: members.reduce(0) { $0 + $1.cpu },
+                                      rss: members.reduce(0) { $0 + $1.rss },
+                                      members: members, appPath: appPath, isGroup: aggregated)
+        }
+        return rows.sorted {
+            let lhs = sortCPU ? $0.cpu : $0.rss
+            let rhs = sortCPU ? $1.cpu : $1.rss
+            if lhs == rhs { return $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            return lhs > rhs
         }
     }
 }
 
-final class TopProcessesSectionView: NSStackView {
-    private let headerLabel = NSTextField(labelWithString: "")
-    private let statusLabel = NSTextField(labelWithString: "Caricamento processi…")
-    private let rows: [TopProcessRowView] = [TopProcessRowView(), TopProcessRowView(), TopProcessRowView()]
+// MARK: - Top processes: single full-width table, expandable details
 
-    init(title: String) {
-        super.init(frame: .zero)
+final class TopProcessRowView: NSStackView {
+    private let iconView = NSImageView()
+    private let titleLabel = NSTextField(labelWithString: "")
+    private let subtitleLabel = NSTextField(labelWithString: "")
+    private let cpuLabel = NSTextField(labelWithString: "—")
+    private let ramLabel = NSTextField(labelWithString: "—")
+    private let chevron = NSTextField(labelWithString: "⌄")
+    private let detailsLabel = NSTextField(wrappingLabelWithString: "")
+    private let activityButton = NSButton(title: "Apri Monitoraggio Attività", target: nil, action: nil)
+    private let detailsStack = NSStackView()
+    var onExpand: (() -> Void)?
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
         orientation = .vertical
         spacing = 5
-        alignment = .leading
+        alignment = .width
 
-        headerLabel.stringValue = title
-        headerLabel.font = .systemFont(ofSize: 10.5, weight: .bold)
-        headerLabel.textColor = .secondaryLabelColor
-        headerLabel.isBezeled = false
-        headerLabel.drawsBackground = false
-        headerLabel.isEditable = false
-        headerLabel.isSelectable = false
-        addArrangedSubview(headerLabel)
+        iconView.imageScaling = .scaleProportionallyDown
+        iconView.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            iconView.widthAnchor.constraint(equalToConstant: 18),
+            iconView.heightAnchor.constraint(equalToConstant: 18)
+        ])
+        titleLabel.font = .systemFont(ofSize: 11.5, weight: .medium)
+        titleLabel.alignment = .left
+        titleLabel.lineBreakMode = .byTruncatingTail
+        titleLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        subtitleLabel.font = .systemFont(ofSize: 9.5)
+        subtitleLabel.textColor = .secondaryLabelColor
+        subtitleLabel.alignment = .left
+        subtitleLabel.lineBreakMode = .byTruncatingTail
+        subtitleLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        subtitleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        headerLabel.leadingAnchor.constraint(equalTo: leadingAnchor).isActive = true
-        headerLabel.trailingAnchor.constraint(equalTo: trailingAnchor).isActive = true
+        // The name stack occupies ALL remaining row width. Otherwise its
+        // intrinsic width can shrink to a few glyphs and drift toward CPU.
+        let nameColumn = NSStackView(views: [titleLabel, subtitleLabel])
+        nameColumn.orientation = .vertical
+        nameColumn.alignment = .width
+        nameColumn.spacing = 0
+        nameColumn.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        nameColumn.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        statusLabel.font = .systemFont(ofSize: 10, weight: .regular)
-        statusLabel.textColor = .secondaryLabelColor
-        statusLabel.lineBreakMode = .byTruncatingTail
-        statusLabel.toolTip = "I processi vengono letti quando apri il pannello."
-        addArrangedSubview(statusLabel)
-        statusLabel.leadingAnchor.constraint(equalTo: leadingAnchor).isActive = true
-        statusLabel.trailingAnchor.constraint(equalTo: trailingAnchor).isActive = true
-
-        for row in rows {
-            row.isHidden = true
-            addArrangedSubview(row)
-            row.leadingAnchor.constraint(equalTo: leadingAnchor).isActive = true
-            row.trailingAnchor.constraint(equalTo: trailingAnchor).isActive = true
+        for (label, width) in [(cpuLabel, 63.0), (ramLabel, 87.0)] {
+            label.font = .monospacedDigitSystemFont(ofSize: 11, weight: .medium)
+            label.alignment = .right
+            label.translatesAutoresizingMaskIntoConstraints = false
+            label.widthAnchor.constraint(equalToConstant: width).isActive = true
+            label.setContentHuggingPriority(.required, for: .horizontal)
         }
+        chevron.font = .systemFont(ofSize: 11, weight: .medium)
+        chevron.textColor = .tertiaryLabelColor
+        chevron.alignment = .right
+        chevron.translatesAutoresizingMaskIntoConstraints = false
+        chevron.widthAnchor.constraint(equalToConstant: 12).isActive = true
+
+        let header = NSStackView(views: [iconView, nameColumn, cpuLabel, ramLabel, chevron])
+        header.orientation = .horizontal
+        header.spacing = 8
+        header.alignment = .centerY
+        header.distribution = .fill
+        header.addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(expandClicked)))
+        addArrangedSubview(header)
+        // Pin the row's content to both edges. In a vertical NSStackView,
+        // an arranged row's intrinsic width is NOT necessarily the table width.
+        header.leadingAnchor.constraint(equalTo: leadingAnchor).isActive = true
+        header.trailingAnchor.constraint(equalTo: trailingAnchor).isActive = true
+        nameColumn.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        nameColumn.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+        detailsLabel.font = .systemFont(ofSize: 10.5)
+        detailsLabel.textColor = .secondaryLabelColor
+        detailsLabel.isSelectable = true
+        detailsLabel.lineBreakMode = .byWordWrapping
+        detailsLabel.maximumNumberOfLines = 7
+        detailsLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        activityButton.bezelStyle = .recessed
+        activityButton.font = .systemFont(ofSize: 10)
+        activityButton.target = self
+        activityButton.action = #selector(openActivityMonitor)
+
+        detailsStack.orientation = .vertical
+        detailsStack.alignment = .leading
+        detailsStack.spacing = 5
+        detailsStack.addArrangedSubview(detailsLabel)
+        detailsStack.addArrangedSubview(activityButton)
+        detailsLabel.leadingAnchor.constraint(equalTo: detailsStack.leadingAnchor).isActive = true
+        detailsLabel.trailingAnchor.constraint(equalTo: detailsStack.trailingAnchor).isActive = true
+        detailsStack.isHidden = true
+        addArrangedSubview(detailsStack)
+        detailsStack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 26).isActive = true
+        detailsStack.trailingAnchor.constraint(equalTo: trailingAnchor).isActive = true
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    func configure(_ item: ProcessDisplayItem, expanded: Bool, command: String?) {
+        titleLabel.stringValue = item.name
+        subtitleLabel.stringValue = item.subtitle
+        cpuLabel.stringValue = String(format: item.cpu < 1 && item.cpu > 0 ? "%.1f%%" : "%.0f%%", item.cpu)
+        ramLabel.stringValue = formatBytes(item.rss)
+        cpuLabel.textColor = .systemBlue
+        ramLabel.textColor = .systemGreen
+        chevron.stringValue = expanded ? "⌃" : "⌄"
+        detailsStack.isHidden = !expanded
+        iconView.image = item.appPath.map { NSWorkspace.shared.icon(forFile: $0) }
+            ?? NSImage(systemSymbolName: "terminal", accessibilityDescription: "Processo")
+        toolTip = "\(item.name) · CPU: \(cpuLabel.stringValue) · RAM RSS: \(ramLabel.stringValue)"
+        if expanded {
+            let pids = item.members.map { String($0.pid) }.joined(separator: ", ")
+            let executable = item.members.first?.comm ?? "Non disponibile"
+            let note = item.isGroup
+                ? "CPU: somma dei processi (100% = un core). RSS aggregata: stima, include memoria condivisa."
+                : "CPU: 100% = un core; RSS: memoria residente stimata."
+            let exactCommand = command.map { "Comando: \($0)\n" } ?? "Comando: caricamento…\n"
+            detailsLabel.stringValue = "PID: \(pids)\nEseguibile: \(executable)\n\(exactCommand)\(note)"
+            detailsLabel.toolTip = detailsLabel.stringValue
+        }
+    }
+
+    @objc private func expandClicked() { onExpand?() }
+
+    @objc private func openActivityMonitor() {
+        NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/Utilities/Activity Monitor.app"))
+    }
+}
+
+final class TopProcessesSectionView: NSStackView {
+    private let headerLabel = NSTextField(labelWithString: "TOP PROCESSI")
+    private let helpLabel = NSTextField(labelWithString: "CPU: 100% = 1 core · RAM: RSS stimata")
+    private let statusLabel = NSTextField(labelWithString: "Caricamento processi…")
+    private let sortSelector = NSSegmentedControl(labels: ["CPU", "RAM"], trackingMode: .selectOne, target: nil, action: nil)
+    private let groupSelector = NSSegmentedControl(labels: ["App", "Processi"], trackingMode: .selectOne, target: nil, action: nil)
+    private let headings = NSStackView()
+    private let rowsStack = NSStackView()
+    private let moreButton = NSButton(title: "Mostra altri", target: nil, action: nil)
+    private var rowViews: [TopProcessRowView] = []
+    private var samples: [ProcessSample] = []
+    private var selectedKey: String?
+    private var expandedList = false
+    private var commandsByPID: [pid_t: String] = [:]
+    private var errorMessage: String?
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        orientation = .vertical
+        spacing = 8
+        alignment = .width
+
+        headerLabel.font = .systemFont(ofSize: 11, weight: .bold)
+        headerLabel.textColor = .secondaryLabelColor
+        helpLabel.font = .systemFont(ofSize: 10)
+        helpLabel.textColor = .tertiaryLabelColor
+
+        sortSelector.selectedSegment = 0
+        groupSelector.selectedSegment = 0
+        for selector in [sortSelector, groupSelector] {
+            selector.controlSize = .small
+            selector.font = .systemFont(ofSize: 10)
+            selector.target = self
+            selector.action = #selector(selectionChanged)
+        }
+        let controls = NSStackView(views: [sortSelector, groupSelector])
+        controls.orientation = .horizontal
+        controls.spacing = 8
+        let titleRow = NSStackView(views: [headerLabel, controls])
+        titleRow.orientation = .horizontal
+        titleRow.distribution = .fill
+        addArrangedSubview(titleRow)
+        addArrangedSubview(helpLabel)
+
+        let nameTitle = NSTextField(labelWithString: "APPLICAZIONE / PROCESSO")
+        let cpuTitle = NSTextField(labelWithString: "CPU")
+        let ramTitle = NSTextField(labelWithString: "RAM (RSS)")
+        let arrow = NSTextField(labelWithString: "")
+        for label in [nameTitle, cpuTitle, ramTitle] {
+            label.font = .systemFont(ofSize: 9, weight: .medium)
+            label.textColor = .tertiaryLabelColor
+        }
+        for (label, width) in [(cpuTitle, 63.0), (ramTitle, 87.0), (arrow, 12.0)] {
+            label.alignment = .right
+            label.translatesAutoresizingMaskIntoConstraints = false
+            label.widthAnchor.constraint(equalToConstant: width).isActive = true
+        }
+        headings.addArrangedSubview(nameTitle)
+        headings.addArrangedSubview(cpuTitle)
+        headings.addArrangedSubview(ramTitle)
+        headings.addArrangedSubview(arrow)
+        headings.orientation = .horizontal
+        headings.spacing = 8
+        headings.distribution = .fill
+        headings.edgeInsets = NSEdgeInsets(top: 0, left: 26, bottom: 0, right: 0)
+        addArrangedSubview(headings)
+        headings.leadingAnchor.constraint(equalTo: leadingAnchor).isActive = true
+        headings.trailingAnchor.constraint(equalTo: trailingAnchor).isActive = true
+
+        statusLabel.font = .systemFont(ofSize: 11)
+        statusLabel.textColor = .secondaryLabelColor
+        addArrangedSubview(statusLabel)
+
+        rowsStack.orientation = .vertical
+        rowsStack.alignment = .width
+        rowsStack.spacing = 10
+        addArrangedSubview(rowsStack)
+        // Expand the list to the full available panel width, independently
+        // of each process name's intrinsic width.
+        rowsStack.leadingAnchor.constraint(equalTo: leadingAnchor).isActive = true
+        rowsStack.trailingAnchor.constraint(equalTo: trailingAnchor).isActive = true
+
+        moreButton.bezelStyle = .recessed
+        moreButton.font = .systemFont(ofSize: 10.5)
+        moreButton.target = self
+        moreButton.action = #selector(moreClicked)
+        addArrangedSubview(moreButton)
+        moreButton.isHidden = true
+        refresh()
     }
 
     required init(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    func update(processes: [(pid: pid_t, name: String, valueText: String, fraction: Double, color: NSColor, tooltip: String)], error: String? = nil) {
-        statusLabel.isHidden = !processes.isEmpty
-        statusLabel.stringValue = error ?? "Nessun processo disponibile"
-        statusLabel.toolTip = error
-        for i in 0..<rows.count {
-            if i < processes.count {
-                rows[i].isHidden = false
-                let p = processes[i]
-                rows[i].update(pid: p.pid, name: p.name, valueText: p.valueText, fraction: p.fraction, color: p.color, tooltipText: p.tooltip)
-            } else {
-                rows[i].isHidden = true
+    func update(samples: [ProcessSample], error: String?) {
+        self.samples = samples
+        self.errorMessage = error
+        // A previous PID may have exited. Do not hold stale command data forever.
+        if commandsByPID.count > 100 { commandsByPID.removeAll() }
+        refresh()
+    }
+
+    private func refresh() {
+        let sorted = ProcessRanker.make(samples, groupApps: groupSelector.selectedSegment != 1,
+                                        sortCPU: sortSelector.selectedSegment != 1)
+        let visible = Array(sorted.prefix(expandedList ? 12 : 5))
+        statusLabel.isHidden = !visible.isEmpty
+        statusLabel.stringValue = errorMessage ?? (samples.isEmpty ? "Nessun processo disponibile" : "")
+        headings.isHidden = visible.isEmpty
+        moreButton.isHidden = sorted.count <= 5
+        moreButton.title = expandedList ? "Mostra meno" : "Mostra altri (\(min(12, sorted.count) - 5))"
+
+        while rowViews.count < visible.count {
+            let row = TopProcessRowView(frame: .zero)
+            rowsStack.addArrangedSubview(row)
+            row.leadingAnchor.constraint(equalTo: rowsStack.leadingAnchor).isActive = true
+            row.trailingAnchor.constraint(equalTo: rowsStack.trailingAnchor).isActive = true
+            rowViews.append(row)
+        }
+        for (index, row) in rowViews.enumerated() {
+            row.isHidden = index >= visible.count
+            guard index < visible.count else { continue }
+            let entry = visible[index]
+            let key = entry.key
+            row.onExpand = { [weak self] in self?.toggleDetails(key: key, entry: entry) }
+            row.configure(entry, expanded: selectedKey == key,
+                          command: commandsByPID[entry.representativePID])
+        }
+    }
+
+    private func toggleDetails(key: String, entry: ProcessDisplayItem) {
+        selectedKey = selectedKey == key ? nil : key
+        refresh()
+        if selectedKey == key && commandsByPID[entry.representativePID] == nil {
+            loadCommand(pid: entry.representativePID)
+        }
+    }
+
+    // Only inspect a complete command when the user expands a row.
+    // Keeps the six-second process sampling inexpensive.
+    private func loadCommand(pid: pid_t) {
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: "/bin/ps")
+            task.arguments = ["-p", String(pid), "-o", "command="]
+            let pipe = Pipe()
+            task.standardOutput = pipe
+            task.standardError = Pipe()
+            let value: String
+            do {
+                try task.run()
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                task.waitUntilExit()
+                value = task.terminationStatus == 0
+                    ? (String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "Non disponibile")
+                    : "Processo terminato"
+            } catch {
+                value = "Non disponibile"
+            }
+            DispatchQueue.main.async { [weak self] in
+                self?.commandsByPID[pid] = String(value.prefix(1000))
+                self?.refresh()
             }
         }
+    }
+
+    @objc private func selectionChanged() {
+        selectedKey = nil
+        expandedList = false
+        refresh()
+    }
+
+    @objc private func moreClicked() {
+        expandedList.toggle()
+        selectedKey = nil
+        refresh()
     }
 }
 
@@ -666,7 +977,6 @@ final class DashboardViewController: NSViewController {
     let cpuSparklineCaption = NSTextField(labelWithString: "Ultimi 60s")
     let coresStack = NSStackView()
     var coreBarViews: [MetricBarView] = []
-    let cpuTopProcesses = TopProcessesSectionView(title: "TOP PROCESSI CPU")
     var coresExpanded: Bool = false
 
     // GPU sits below CPU, preserving two readable columns.
@@ -707,11 +1017,12 @@ final class DashboardViewController: NSViewController {
     let swapActivityTitle = NSTextField(labelWithString: "I/O")
     let swapActivityValue = NSTextField(labelWithString: "↓ 0 KiB/s · ↑ 0 KiB/s")
 
-    let ramTopProcesses = TopProcessesSectionView(title: "TOP PROCESSI RAM (RSS)")
+    let topProcesses = TopProcessesSectionView(frame: .zero)
 
     // Footer
     let thermalLabel = NSTextField(labelWithString: "Stato termico: Nominale")
     let copyDiagButton = NSButton(title: "Copia diagnostica", target: nil, action: nil)
+    let showProcessesButton = NSButton(title: "Processi ↓", target: nil, action: nil)
 
     var onQuit: (() -> Void)?
     var onToggleCores: (() -> Void)?
@@ -732,17 +1043,23 @@ final class DashboardViewController: NSViewController {
         columns.distribution = .fillEqually
         columns.spacing = 20
 
-        // A fixed-height viewport keeps the footer visible on shorter displays.
-        // The NSStackView remains full-height inside the scrollable document.
+        // One scrollable document: resource columns, then full-width process table.
+        // The footer stays pinned outside the scrollable document.
         let body = NSView()
         body.translatesAutoresizingMaskIntoConstraints = false
-        body.addSubview(columns)
-        columns.translatesAutoresizingMaskIntoConstraints = false
+        let processDivider = NSBox()
+        processDivider.boxType = .separator
+        let document = NSStackView(views: [columns, processDivider, topProcesses])
+        document.orientation = .vertical
+        document.alignment = .width
+        document.spacing = 12
+        body.addSubview(document)
+        document.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
-            columns.topAnchor.constraint(equalTo: body.topAnchor),
-            columns.leadingAnchor.constraint(equalTo: body.leadingAnchor),
-            columns.trailingAnchor.constraint(equalTo: body.trailingAnchor),
-            columns.bottomAnchor.constraint(equalTo: body.bottomAnchor)
+            document.topAnchor.constraint(equalTo: body.topAnchor),
+            document.leadingAnchor.constraint(equalTo: body.leadingAnchor),
+            document.trailingAnchor.constraint(equalTo: body.trailingAnchor),
+            document.bottomAnchor.constraint(equalTo: body.bottomAnchor)
         ])
         let bodyScrollView = NSScrollView()
         bodyScrollView.drawsBackground = false
@@ -771,7 +1088,7 @@ final class DashboardViewController: NSViewController {
             bodyScrollView.topAnchor.constraint(equalTo: root.topAnchor, constant: 14),
             bodyScrollView.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 14),
             bodyScrollView.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -14),
-            bodyScrollView.heightAnchor.constraint(equalToConstant: 400),
+            bodyScrollView.heightAnchor.constraint(equalToConstant: 430),
             body.widthAnchor.constraint(equalTo: bodyScrollView.contentView.widthAnchor),
 
             separator.topAnchor.constraint(equalTo: bodyScrollView.bottomAnchor, constant: 10),
@@ -883,11 +1200,6 @@ final class DashboardViewController: NSViewController {
         gpuDevicesStack.leadingAnchor.constraint(equalTo: column.leadingAnchor).isActive = true
         gpuDevicesStack.trailingAnchor.constraint(equalTo: column.trailingAnchor).isActive = true
 
-        // Top CPU Processes
-        column.addArrangedSubview(cpuTopProcesses)
-        cpuTopProcesses.leadingAnchor.constraint(equalTo: column.leadingAnchor).isActive = true
-        cpuTopProcesses.trailingAnchor.constraint(equalTo: column.trailingAnchor).isActive = true
-
         return column
     }
 
@@ -963,12 +1275,6 @@ final class DashboardViewController: NSViewController {
         column.addArrangedSubview(healthDetailLabel)
         healthStatusLabel.toolTip = "Gli avvisi richiedono pressione critica per 6s, elevata per 30s oppure swap I/O >= 5 MiB/s per 20s."
 
-        // Process-heavy apps (e.g. llama-server) deserve primary placement.
-        // With a scrollable viewport these rows remain accessible at all window sizes.
-        column.addArrangedSubview(ramTopProcesses)
-        ramTopProcesses.leadingAnchor.constraint(equalTo: column.leadingAnchor).isActive = true
-        ramTopProcesses.trailingAnchor.constraint(equalTo: column.trailingAnchor).isActive = true
-
         // RAM components are shown separately, not added together.
         for bar in [activeBar, wiredBar, compressedBar, freeBar] {
             column.addArrangedSubview(bar)
@@ -1032,12 +1338,17 @@ final class DashboardViewController: NSViewController {
         copyDiagButton.target = self
         copyDiagButton.action = #selector(copyDiagClicked)
 
-        let line1 = NSStackView(views: [thermalLabel, copyDiagButton])
+        showProcessesButton.bezelStyle = .recessed
+        showProcessesButton.font = .systemFont(ofSize: 11)
+        showProcessesButton.target = self
+        showProcessesButton.action = #selector(showProcessesClicked)
+
+        let line1 = NSStackView(views: [thermalLabel, showProcessesButton, copyDiagButton])
         line1.orientation = .horizontal
         line1.distribution = .fill
 
         // Line 2: Version, Auto-start, Quit
-        let appTitle = NSTextField(labelWithString: "MenuMeter v4.2")
+        let appTitle = NSTextField(labelWithString: "MenuMeter v4.3")
         appTitle.font = .systemFont(ofSize: 11, weight: .medium)
         appTitle.textColor = .tertiaryLabelColor
         appTitle.isBezeled = false
@@ -1076,6 +1387,11 @@ final class DashboardViewController: NSViewController {
 
     @objc private func loginCheckboxChanged(_ sender: NSButton) {
         LaunchAgentManager.setEnabled(sender.state == .on)
+    }
+
+    @objc private func showProcessesClicked() {
+        // The process table is below the resource charts in the scrollable pane.
+        _ = topProcesses.scrollToVisible(topProcesses.bounds)
     }
 
     @objc private func copyDiagClicked() {
@@ -1298,20 +1614,15 @@ final class DashboardViewController: NSViewController {
         thermalLabel.textColor = thermal.color
     }
 
-    func updateTopProcesses(
-        cpu: [(pid: pid_t, name: String, valueText: String, fraction: Double, color: NSColor, tooltip: String)],
-        ram: [(pid: pid_t, name: String, valueText: String, fraction: Double, color: NSColor, tooltip: String)],
-        error: String? = nil
-    ) {
-        cpuTopProcesses.update(processes: cpu, error: error)
-        ramTopProcesses.update(processes: ram, error: error)
+    func updateTopProcesses(samples: [ProcessSample], error: String?) {
+        topProcesses.update(samples: samples, error: error)
     }
 }
 
 // MARK: - MenuMeter Engine
 
 final class MenuMeter: NSObject, NSPopoverDelegate {
-    private let status = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+    private let status = NSStatusBar.system.statusItem(withLength: MenuBarText.fixedWidth)
     private let popover = NSPopover()
     private let dashboard = DashboardViewController()
 
@@ -1332,8 +1643,7 @@ final class MenuMeter: NSObject, NSPopoverDelegate {
     private var latestCPUData: (total: Double, cores: [Double])?
     private var latestRAMStats: (total: Double, used: Double, active: Double, wired: Double, compressed: Double, free: Double, swapUsed: Double?, swapTotal: Double?, swapInRate: Double, swapOutRate: Double, pressure: (name: String, color: NSColor, level: Int)?)?
 
-    private var topCPUList: [(pid: pid_t, name: String, valueText: String, fraction: Double, color: NSColor, tooltip: String)] = []
-    private var topRAMList: [(pid: pid_t, name: String, valueText: String, fraction: Double, color: NSColor, tooltip: String)] = []
+    private var topProcessSamples: [ProcessSample] = []
     private var topProcessesError: String?
 
     private var timer: Timer?
@@ -1345,8 +1655,7 @@ final class MenuMeter: NSObject, NSPopoverDelegate {
         super.init()
 
         if let button = status.button {
-            button.title = "CPU … · GPU … · RAM …"
-            button.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+            button.attributedTitle = MenuBarText.styled(cpu: nil, gpu: nil, ram: nil, severity: 0)
             button.target = self
             button.action = #selector(togglePopover)
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
@@ -1540,34 +1849,12 @@ final class MenuMeter: NSObject, NSPopoverDelegate {
                 errorMessage = "Impossibile eseguire ps: \(error.localizedDescription)"
             }
 
-            // Top CPU by distinct process
-            let topCPU = items.sorted { $0.cpu > $1.cpu }.prefix(3).map { item -> (pid: pid_t, name: String, valueText: String, fraction: Double, color: NSColor, tooltip: String) in
-                let app = NSRunningApplication(processIdentifier: item.pid)
-                let name = cleanProcessName(app?.localizedName ?? item.comm)
-                let pct = item.cpu
-                let color: NSColor = pct > 150.0 ? .systemOrange : .systemBlue
-                let frac = min(pct / 100.0, 1.0)
-                let tooltip = "PID \(item.pid): \(item.comm)\nCPU: \(String(format: "%.1f%%", pct))\nRAM: \(formatBytes(item.rss)) (RSS stimata)\nFai clic per aprire Monitoraggio Attività o portare in primo piano."
-                return (pid: item.pid, name: name, valueText: String(format: "%.0f%%", pct), fraction: frac, color: color, tooltip: tooltip)
-            }
-
-            // Top RAM by distinct process
-            let totalRam = Double(ProcessInfo.processInfo.physicalMemory)
-            let topRAM = items.sorted { $0.rss > $1.rss }.prefix(3).map { item -> (pid: pid_t, name: String, valueText: String, fraction: Double, color: NSColor, tooltip: String) in
-                let app = NSRunningApplication(processIdentifier: item.pid)
-                let name = cleanProcessName(app?.localizedName ?? item.comm)
-                let fraction = totalRam == 0 ? 0 : min(item.rss / totalRam, 1.0)
-                let tooltip = "PID \(item.pid): \(item.comm)\nRAM: \(formatBytes(item.rss)) (RSS stimata)\nCPU: \(String(format: "%.1f%%", item.cpu))\nFai clic per aprire Monitoraggio Attività o portare in primo piano."
-                return (pid: item.pid, name: name, valueText: formatBytes(item.rss), fraction: fraction, color: .systemCyan, tooltip: tooltip)
-            }
-
             DispatchQueue.main.async { [weak self] in
                 guard let self = self else { return }
                 self.isFetchingProcesses = false
-                self.topCPUList = Array(topCPU)
-                self.topRAMList = Array(topRAM)
+                self.topProcessSamples = items
                 self.topProcessesError = errorMessage
-                self.dashboard.updateTopProcesses(cpu: self.topCPUList, ram: self.topRAMList, error: errorMessage)
+                self.dashboard.updateTopProcesses(samples: items, error: errorMessage)
             }
         }
     }
@@ -1628,17 +1915,13 @@ final class MenuMeter: NSObject, NSPopoverDelegate {
             lines.append("Raccolta processi: \(error)")
         }
 
-        if !topCPUList.isEmpty {
-            lines.append("Top CPU:")
-            for p in topCPUList {
-                lines.append("  • \(p.name) (PID \(p.pid)): \(p.valueText)")
-            }
-        }
-
-        if !topRAMList.isEmpty {
-            lines.append("Top RAM (RSS stimata):")
-            for p in topRAMList {
-                lines.append("  • \(p.name) (PID \(p.pid)): \(p.valueText)")
+        for (label, sortCPU) in [("Top CPU", true), ("Top RAM RSS", false)] {
+            let top = ProcessRanker.make(topProcessSamples, groupApps: true, sortCPU: sortCPU).prefix(5)
+            if !top.isEmpty {
+                lines.append("\(label) (app raggruppate se identificabili):")
+                for item in top {
+                    lines.append("  • \(item.name) · CPU \(String(format: "%.1f%%", item.cpu)) · RSS \(formatBytes(item.rss)) · \(item.subtitle)")
+                }
             }
         }
 
@@ -1750,15 +2033,11 @@ final class MenuMeter: NSObject, NSPopoverDelegate {
 
         }
 
-        let cpuText = latestCPUData.map { String(format: "%.0f%%", $0.total) } ?? "…"
-        let gpuText = gpuDevices.compactMap { $0.utilization }.max()
-            .map { String(format: "%.0f%%", $0) } ?? "—"
-        let ramText = latestRAMStats.map { data in
-            String(format: "%.0f%%", data.total > 0 ? 100 * data.used / data.total : 0)
-        } ?? "…"
         let severity = latestHealth?.severity ?? 0
-        let alertGlyph = severity == 2 ? " ■" : (severity == 1 ? " ▲" : "")
-        status.button?.title = "CPU \(cpuText) · GPU \(gpuText) · RAM \(ramText)\(alertGlyph)"
+        status.button?.attributedTitle = MenuBarText.styled(cpu: latestCPUData?.total,
+            gpu: gpuDevices.compactMap { $0.utilization }.max(),
+            ram: latestRAMStats.map { $0.total > 0 ? 100 * $0.used / $0.total : 0 },
+            severity: severity)
 
         if popover.isShown {
             fetchTopProcesses()
@@ -1772,6 +2051,48 @@ final class MenuMeter: NSObject, NSPopoverDelegate {
 
 #if MENUMETER_TEST
 // Pure-logic smoke tests: no GUI, no permission prompts, no synthetic swap usage.
+let statusCases = [
+    MenuBarText.make(cpu: 8, gpu: 0, ram: 69, severity: 0),
+    MenuBarText.make(cpu: 100, gpu: 100, ram: 100, severity: 2),
+    MenuBarText.make(cpu: nil, gpu: nil, ram: nil, severity: 1),
+    MenuBarText.make(cpu: 9, gpu: 10, ram: 99, severity: 0)
+]
+assert(Set(statusCases.map { $0.count }).count == 1, "menu bar must be stable at every utilization")
+assert(statusCases[0].contains("CPU   8%"))
+assert(statusCases[1].contains("GPU 100%"))
+assert(statusCases[2].contains("GPU    —"))
+// Check the actual attributed layout, not only the fallback plain text.
+// Reserve enough width for the widest styled content plus AppKit insets.
+let statusStyleCases = [
+    MenuBarText.styled(cpu: 8, gpu: 0, ram: 69, severity: 0),
+    MenuBarText.styled(cpu: 100, gpu: 100, ram: 100, severity: 2),
+    MenuBarText.styled(cpu: nil, gpu: nil, ram: nil, severity: 1),
+    MenuBarText.styled(cpu: 9, gpu: 10, ram: 99, severity: 0)
+]
+assert(statusStyleCases.allSatisfy { $0.size().width <= MenuBarText.fixedWidth - 16 },
+       "colored labels must fit the reserved status-item width, including insets")
+assert(MenuBarText.fixedWidth >= 234)
+print("MenuMeter status width: \(MenuBarText.fixedWidth)pt · case text widths: \(statusStyleCases.map { Int(ceil($0.size().width)) })pt")
+assert(statusStyleCases.allSatisfy { $0.string.contains("CPU") && $0.string.contains("GPU") && $0.string.contains("RAM") })
+assert(Set(statusStyleCases.map { $0.string.count }).count == 1)
+assert(ProcessIdentity.bundleRoot("/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Helper.app/Contents/MacOS/Google Chrome Helper") == "/Applications/Google Chrome.app")
+assert(ProcessIdentity.bundleRoot("/opt/homebrew/bin/python3") == nil)
+assert(ProcessIdentity.applicationName("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome") == "Google Chrome")
+assert(ProcessIdentity.executableName("/opt/homebrew/bin/python3") == "python3")
+let mockProcesses: [ProcessSample] = [
+    ProcessSample(pid: 101, cpu: 10, rss: 800 * mib, comm: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+    ProcessSample(pid: 102, cpu: 5, rss: 200 * mib, comm: "/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Helper.app/Contents/MacOS/Google Chrome Helper"),
+    ProcessSample(pid: 103, cpu: 20, rss: 100 * mib, comm: "/opt/homebrew/bin/python3"),
+    ProcessSample(pid: 104, cpu: 1, rss: 600 * mib, comm: "/opt/homebrew/bin/python3")
+]
+let grouped = ProcessRanker.make(mockProcesses, groupApps: true, sortCPU: true)
+assert(grouped.count == 3, "only processes in the same app bundle should aggregate")
+assert(grouped.first?.representativePID == 103)
+let chrome = grouped.first(where: { $0.name == "Google Chrome" })
+assert(chrome?.cpu == 15 && chrome?.rss == 1000 * mib && chrome?.members.count == 2)
+let ungrouped = ProcessRanker.make(mockProcesses, groupApps: false, sortCPU: false)
+assert(ungrouped.count == 4 && ungrouped.first?.representativePID == 101)
+
 let gpu = GPUStatisticsParser.parse([
     "Device Utilization %": 76,
     "Renderer Utilization %": 58,
@@ -1823,7 +2144,32 @@ assert(unrecognized.status == "Pressione non disponibile")
 // Occupied-but-idle swap must not trigger an alert: only actual I/O and pressure count.
 let recovered = MemoryHealthAnalyzer.assess(pressureLevels: [2, 2, 2, 1], swapRates: [6 * mib, 6 * mib, 6 * mib, 0])
 assert(recovered.severity == 0)
-print("MenuMeter memory-health tests passed")
+// Instantiate the actual AppKit dashboard to catch view-hierarchy regressions.
+_ = NSApplication.shared
+let layoutProbe = DashboardViewController()
+let layoutRoot = layoutProbe.view
+assert(layoutRoot.fittingSize.width >= 540)
+layoutProbe.updateTopProcesses(samples: mockProcesses, error: nil)
+assert(layoutProbe.topProcesses.arrangedSubviews.count >= 4)
+// Regression: short and long names must start at the same left edge, with the
+// full available name-column width rather than their own intrinsic width.
+let processTable = TopProcessesSectionView(frame: NSRect(x: 0, y: 0, width: 512, height: 460))
+processTable.update(samples: mockProcesses, error: nil)
+processTable.layoutSubtreeIfNeeded()
+let processRows = processTable.arrangedSubviews
+    .compactMap { $0 as? NSStackView }
+    .flatMap { $0.arrangedSubviews.compactMap { $0 as? TopProcessRowView } }
+assert(processRows.count == 3)
+let nameRects: [NSRect] = processRows.compactMap { row in
+    guard let header = row.arrangedSubviews.first as? NSStackView,
+          header.arrangedSubviews.count > 1,
+          let nameStack = header.arrangedSubviews[1] as? NSStackView else { return nil }
+    return nameStack.convert(nameStack.bounds, to: processTable)
+}
+assert(nameRects.count == 3)
+assert(nameRects.allSatisfy { abs($0.minX - nameRects[0].minX) < 1 })
+assert(nameRects.allSatisfy { $0.width > 180 }, "name column must not collapse")
+print("MenuMeter CPU/GPU/RAM and left-aligned process layout tests passed")
 #else
 let app = NSApplication.shared
 app.setActivationPolicy(.accessory)
