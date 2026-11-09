@@ -90,6 +90,7 @@ Do not use sudo, and do not guess an index when multiple monitors are connected.
 ### Limitations
 
 - m1ddc is an **optional runtime dependency** for hardware mode; software mode is native and self-contained.
+- The slider supports **5%–100%** in both hardware and software modes. The monitor must independently support a hardware setting for it to produce a visible change (5% was verified on Atlantis A05-P156WP).
 - Hardware writes are delayed by 350 ms during slider drags to avoid excessive DDC traffic.
 - The app shows a command acknowledgment, not verified hardware brightness. Confirm real visual change before assuming support.
 - The software dimming overlay is removed when you quit the app.
