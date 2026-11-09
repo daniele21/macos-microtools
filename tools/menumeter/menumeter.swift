@@ -42,6 +42,19 @@ private enum MenuBarText {
         return "CPU \(percent(cpu)) · GPU \(percent(gpu)) · RAM \(percent(ram)) \(alert)"
     }
 
+    // Measure worst-case text at startup and reserve that width for the whole
+    // session. The reserved item never resizes when percentages or alerts change.
+    // A 16pt buffer covers the native NSStatusBarButton text insets.
+    static let fixedWidth: CGFloat = {
+        let cases = [
+            styled(cpu: 100, gpu: 100, ram: 100, severity: 2),
+            styled(cpu: nil, gpu: nil, ram: nil, severity: 1),
+            styled(cpu: 8, gpu: 0, ram: 69, severity: 0)
+        ]
+        let maximumTextWidth = cases.map { $0.size().width }.max() ?? 0
+        return max(CGFloat(234), ceil(maximumTextWidth + 16))
+    }()
+
     // Colored status text is deliberately subtle: small metric dots and
     // matching numbers, neutral labels. Names stay visible without color,
     // including for accessibility and monochrome appearances.
@@ -67,11 +80,11 @@ private enum MenuBarText {
             if index > 0 {
                 append("  ", font: labelFont, color: .secondaryLabelColor)
             }
-            let indicator = value == nil || value!.isNaN ? NSColor.tertiaryLabelColor : color
-            append("●", font: dotFont, color: indicator)
+            let available = value.map { $0.isFinite && $0 >= 0 } ?? false
+            append("●", font: dotFont, color: available ? color : .tertiaryLabelColor)
             append(" \(name) ", font: labelFont, color: .secondaryLabelColor)
             append(percent(value), font: valueFont,
-                   color: value == nil ? .secondaryLabelColor : color)
+                   color: available ? color : .secondaryLabelColor)
         }
 
         // Reserve alert space even when memory pressure is normal, preventing
@@ -1609,7 +1622,7 @@ final class DashboardViewController: NSViewController {
 // MARK: - MenuMeter Engine
 
 final class MenuMeter: NSObject, NSPopoverDelegate {
-    private let status = NSStatusBar.system.statusItem(withLength: 234)
+    private let status = NSStatusBar.system.statusItem(withLength: MenuBarText.fixedWidth)
     private let popover = NSPopover()
     private let dashboard = DashboardViewController()
 
@@ -2049,15 +2062,17 @@ assert(statusCases[0].contains("CPU   8%"))
 assert(statusCases[1].contains("GPU 100%"))
 assert(statusCases[2].contains("GPU    —"))
 // Check the actual attributed layout, not only the fallback plain text.
-// 234pt is the fixed NSStatusItem width. Leave room for AppKit insets.
+// Reserve enough width for the widest styled content plus AppKit insets.
 let statusStyleCases = [
     MenuBarText.styled(cpu: 8, gpu: 0, ram: 69, severity: 0),
     MenuBarText.styled(cpu: 100, gpu: 100, ram: 100, severity: 2),
     MenuBarText.styled(cpu: nil, gpu: nil, ram: nil, severity: 1),
     MenuBarText.styled(cpu: 9, gpu: 10, ram: 99, severity: 0)
 ]
-assert(statusStyleCases.allSatisfy { $0.size().width <= 218 },
-       "colored labels must fit the fixed 234pt menu bar item including insets")
+assert(statusStyleCases.allSatisfy { $0.size().width <= MenuBarText.fixedWidth - 16 },
+       "colored labels must fit the reserved status-item width, including insets")
+assert(MenuBarText.fixedWidth >= 234)
+print("MenuMeter status width: \(MenuBarText.fixedWidth)pt · case text widths: \(statusStyleCases.map { Int(ceil($0.size().width)) })pt")
 assert(statusStyleCases.allSatisfy { $0.string.contains("CPU") && $0.string.contains("GPU") && $0.string.contains("RAM") })
 assert(Set(statusStyleCases.map { $0.string.count }).count == 1)
 assert(ProcessIdentity.bundleRoot("/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Helper.app/Contents/MacOS/Google Chrome Helper") == "/Applications/Google Chrome.app")
