@@ -136,6 +136,15 @@ private final class SoftwareDimmer {
     }
 }
 
+private enum BrightnessRange {
+    static let minimum = 5
+    static let maximum = 100
+
+    static func clamp(_ percent: Int) -> Int {
+        min(maximum, max(minimum, percent))
+    }
+}
+
 private final class BrightnessController: NSViewController {
     private var mode: Int = 1 // 0: hardware, 1: software
     private var tested = false
@@ -150,7 +159,7 @@ private final class BrightnessController: NSViewController {
     private let titleLabel = NSTextField(labelWithString: "DisplayPulse")
     private let infoLabel = NSTextField(labelWithString: "Atlantis A05-P156WP · USB-C")
     private let modeControl = NSSegmentedControl(labels: ["Hardware", "Software"], trackingMode: .selectOne, target: nil, action: nil)
-    private let slider = NSSlider(value: 100, minValue: 10, maxValue: 100, target: nil, action: nil)
+    private let slider = NSSlider(value: 100, minValue: Double(BrightnessRange.minimum), maxValue: Double(BrightnessRange.maximum), target: nil, action: nil)
     private let valueLabel = NSTextField(labelWithString: "100%")
     private let statusLabel = NSTextField(wrappingLabelWithString: "Software: nessun oscuramento attivo.")
     private let targetField = NSTextField(string: "1")
@@ -325,7 +334,7 @@ private final class BrightnessController: NSViewController {
                     self.modeControl.selectedSegment = 0
                     self.dimmer.clear()
                     let percent = Int((Double(response.current) / Double(response.maximum) * 100).rounded())
-                    self.slider.integerValue = min(100, max(10, percent))
+                    self.slider.integerValue = BrightnessRange.clamp(percent)
                     self.updatePercentage()
                 case .failure(let error):
                     self.mode = 1
@@ -460,6 +469,10 @@ private struct DisplayPulseMain {
             precondition(!succeeds("abc", "100"), "nonnumeric reply is invalid")
             precondition(succeeds("50", "100"), "normal reading must be valid")
             precondition(succeeds("0", "100"), "zero current can be valid with positive maximum")
+            precondition(BrightnessRange.clamp(0) == 5, "slider must enforce 5% minimum")
+            precondition(BrightnessRange.clamp(5) == 5, "5% must remain selectable")
+            precondition(BrightnessRange.clamp(50) == 50, "midrange percentage must be unchanged")
+            precondition(BrightnessRange.clamp(101) == 100, "slider must enforce 100% maximum")
             print("DisplayPulse DDC probe parsing tests passed.")
             return
         }
