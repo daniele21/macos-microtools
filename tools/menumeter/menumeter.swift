@@ -41,6 +41,46 @@ private enum MenuBarText {
         let alert = severity == 2 ? "■" : (severity == 1 ? "▲" : " ")
         return "CPU \(percent(cpu)) · GPU \(percent(gpu)) · RAM \(percent(ram)) \(alert)"
     }
+
+    // Colored status text is deliberately subtle: small metric dots and
+    // matching numbers, neutral labels. Names stay visible without color,
+    // including for accessibility and monochrome appearances.
+    static func styled(cpu: Double?, gpu: Double?, ram: Double?, severity: Int) -> NSAttributedString {
+        let output = NSMutableAttributedString(string: "")
+        let labelFont = NSFont.systemFont(ofSize: 10, weight: .medium)
+        let valueFont = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .semibold)
+        let dotFont = NSFont.systemFont(ofSize: 9, weight: .semibold)
+
+        func append(_ string: String, font: NSFont, color: NSColor) {
+            output.append(NSAttributedString(string: string, attributes: [
+                .font: font, .foregroundColor: color
+            ]))
+        }
+
+        let metrics: [(String, Double?, NSColor)] = [
+            ("CPU", cpu, .systemBlue),
+            ("GPU", gpu, .systemPurple),
+            ("RAM", ram, severity == 2 ? .systemRed : (severity == 1 ? .systemOrange : .systemGreen))
+        ]
+        for (index, metric) in metrics.enumerated() {
+            let (name, value, color) = metric
+            if index > 0 {
+                append("  ", font: labelFont, color: .secondaryLabelColor)
+            }
+            let indicator = value == nil || value!.isNaN ? NSColor.tertiaryLabelColor : color
+            append("●", font: dotFont, color: indicator)
+            append(" \(name) ", font: labelFont, color: .secondaryLabelColor)
+            append(percent(value), font: valueFont,
+                   color: value == nil ? .secondaryLabelColor : color)
+        }
+
+        // Reserve alert space even when memory pressure is normal, preventing
+        // all neighboring menu bar icons from shifting as the state changes.
+        let glyph = severity == 2 ? "■" : (severity == 1 ? "▲" : " ")
+        let alertColor: NSColor = severity == 2 ? .systemRed : .systemOrange
+        append(" \(glyph)", font: dotFont, color: alertColor)
+        return output
+    }
 }
 
 private func cleanProcessName(_ raw: String) -> String {
@@ -1602,8 +1642,7 @@ final class MenuMeter: NSObject, NSPopoverDelegate {
         super.init()
 
         if let button = status.button {
-            button.title = MenuBarText.make(cpu: nil, gpu: nil, ram: nil, severity: 0)
-            button.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+            button.attributedTitle = MenuBarText.styled(cpu: nil, gpu: nil, ram: nil, severity: 0)
             button.target = self
             button.action = #selector(togglePopover)
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
@@ -1982,7 +2021,7 @@ final class MenuMeter: NSObject, NSPopoverDelegate {
         }
 
         let severity = latestHealth?.severity ?? 0
-        status.button?.title = MenuBarText.make(cpu: latestCPUData?.total,
+        status.button?.attributedTitle = MenuBarText.styled(cpu: latestCPUData?.total,
             gpu: gpuDevices.compactMap { $0.utilization }.max(),
             ram: latestRAMStats.map { $0.total > 0 ? 100 * $0.used / $0.total : 0 },
             severity: severity)
@@ -2009,6 +2048,18 @@ assert(Set(statusCases.map { $0.count }).count == 1, "menu bar must be stable at
 assert(statusCases[0].contains("CPU   8%"))
 assert(statusCases[1].contains("GPU 100%"))
 assert(statusCases[2].contains("GPU    —"))
+// Check the actual attributed layout, not only the fallback plain text.
+// 234pt is the fixed NSStatusItem width. Leave room for AppKit insets.
+let statusStyleCases = [
+    MenuBarText.styled(cpu: 8, gpu: 0, ram: 69, severity: 0),
+    MenuBarText.styled(cpu: 100, gpu: 100, ram: 100, severity: 2),
+    MenuBarText.styled(cpu: nil, gpu: nil, ram: nil, severity: 1),
+    MenuBarText.styled(cpu: 9, gpu: 10, ram: 99, severity: 0)
+]
+assert(statusStyleCases.allSatisfy { $0.size().width <= 218 },
+       "colored labels must fit the fixed 234pt menu bar item including insets")
+assert(statusStyleCases.allSatisfy { $0.string.contains("CPU") && $0.string.contains("GPU") && $0.string.contains("RAM") })
+assert(Set(statusStyleCases.map { $0.string.count }).count == 1)
 assert(ProcessIdentity.bundleRoot("/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Helper.app/Contents/MacOS/Google Chrome Helper") == "/Applications/Google Chrome.app")
 assert(ProcessIdentity.bundleRoot("/opt/homebrew/bin/python3") == nil)
 assert(ProcessIdentity.applicationName("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome") == "Google Chrome")
