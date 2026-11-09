@@ -2045,7 +2045,14 @@ assert(unrecognized.status == "Pressione non disponibile")
 // Occupied-but-idle swap must not trigger an alert: only actual I/O and pressure count.
 let recovered = MemoryHealthAnalyzer.assess(pressureLevels: [2, 2, 2, 1], swapRates: [6 * mib, 6 * mib, 6 * mib, 0])
 assert(recovered.severity == 0)
-print("MenuMeter memory-health tests passed")
+// Instantiate the actual AppKit dashboard to catch view-hierarchy regressions.
+_ = NSApplication.shared
+let layoutProbe = DashboardViewController()
+let layoutRoot = layoutProbe.view
+assert(layoutRoot.fittingSize.width >= 540)
+layoutProbe.updateTopProcesses(samples: mockProcesses, error: nil)
+assert(layoutProbe.topProcesses.arrangedSubviews.count >= 4)
+print("MenuMeter CPU/GPU/RAM and process layout tests passed")
 #else
 let app = NSApplication.shared
 app.setActivationPolicy(.accessory)
