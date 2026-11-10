@@ -1677,7 +1677,7 @@ final class DashboardViewController: NSViewController {
         line1.distribution = .fill
 
         // Line 2: Version, Auto-start, Quit
-        let appTitle = NSTextField(labelWithString: "MenuMeter v4.3")
+        let appTitle = NSTextField(labelWithString: "MenuMeter v5.0")
         appTitle.font = .systemFont(ofSize: 11, weight: .medium)
         appTitle.textColor = .tertiaryLabelColor
         appTitle.isBezeled = false
@@ -1719,8 +1719,7 @@ final class DashboardViewController: NSViewController {
     }
 
     @objc private func showProcessesClicked() {
-        // The process table is below the resource charts in the scrollable pane.
-        _ = topProcesses.scrollToVisible(topProcesses.bounds)
+        showDetail(at: topProcesses)
     }
 
     @objc private func copyDiagClicked() {
@@ -1737,6 +1736,7 @@ final class DashboardViewController: NSViewController {
 
     func updateCPU(total: Double, history: [Double], cores: [Double], smoothedColor: NSColor) {
         cpuValueLabel.stringValue = String(format: "%.0f%%", total)
+        overviewCPU.update(value: total, subtitle: "\(cores.count) core CPU", fraction: total / 100, color: smoothedColor)
         cpuValueLabel.textColor = smoothedColor
         cpuSparklineView.strokeColor = smoothedColor
         cpuSparklineView.fillColor = smoothedColor.withAlphaComponent(0.18)
@@ -1777,6 +1777,9 @@ final class DashboardViewController: NSViewController {
 
     func updateGPU(devices: [GPUDeviceSample], history: [Double]) {
         let peak = devices.compactMap { $0.utilization }.max()
+        let coreCount = devices.compactMap { $0.coreCount }.reduce(0, +)
+        let gpuSubtitle = coreCount > 0 ? "\(coreCount) core GPU" : "GPU integrata"
+        overviewGPU.update(value: peak, subtitle: gpuSubtitle, fraction: (peak ?? 0) / 100)
         gpuValueLabel.stringValue = peak.map { String(format: "%.0f%%", $0) } ?? "—"
         gpuValueLabel.textColor = peak == nil ? .secondaryLabelColor : .systemPurple
         gpuSparklineView.values = peak == nil ? [] : history
@@ -1872,6 +1875,16 @@ final class DashboardViewController: NSViewController {
         let totalGiB = total / gib
         let usedGiB = used / gib
         let usedPct = total == 0 ? 0 : 100.0 * (used / total)
+        let memoryColor: NSColor = health.severity == 2 ? .systemRed : (health.severity == 1 ? .systemOrange : .systemGreen)
+        overviewRAM.update(
+            value: usedPct,
+            subtitle: String(format: "%.1f / %.1f GiB", usedGiB, totalGiB),
+            fraction: usedPct / 100, color: memoryColor
+        )
+        overviewHealthLabel.stringValue = health.status
+        overviewHealthLabel.textColor = health.severity == 2 ? .systemRed
+            : (health.severity == 1 ? .systemOrange : (pressure?.level == 1 ? .systemGreen : .secondaryLabelColor))
+        overviewSwapLabel.stringValue = "Swap " + (swapUsed.map(formatBytes) ?? "—")
         ramValueLabel.stringValue = String(format: "%.1f / %.1f GiB (%.0f%%)", usedGiB, totalGiB, usedPct)
 
         ramSparklineView.values = history
@@ -1945,6 +1958,7 @@ final class DashboardViewController: NSViewController {
 
     func updateTopProcesses(samples: [ProcessSample], error: String?) {
         topProcesses.update(samples: samples, error: error)
+        overviewProcesses.update(samples: samples, error: error)
     }
 }
 
@@ -2037,6 +2051,7 @@ final class MenuMeter: NSObject, NSPopoverDelegate {
             return
         }
 
+        dashboard.showOverview()
         update()
         popover.contentSize = dashboard.view.fittingSize
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
@@ -2492,6 +2507,14 @@ let layoutRoot = layoutProbe.view
 assert(layoutRoot.fittingSize.width >= 540)
 layoutProbe.updateTopProcesses(samples: mockProcesses, error: nil)
 assert(layoutProbe.topProcesses.arrangedSubviews.count >= 4)
+assert(layoutProbe.overviewProcesses.arrangedSubviews.count >= 4)
+layoutProbe.showOverview()
+layoutProbe.updateCPU(total: 42, history: [42], cores: [40, 44], smoothedColor: .systemBlue)
+layoutProbe.updateGPU(devices: [], history: [])
+layoutProbe.updateTopProcesses(samples: mockProcesses, error: nil)
+assert(layoutProbe.overviewCPU.subviews.count > 0)
+assert(layoutProbe.overviewGPU.subviews.count > 0)
+assert(layoutProbe.overviewRAM.subviews.count > 0)
 // Regression: short and long names must start at the same left edge, with the
 // full available name-column width rather than their own intrinsic width.
 let processTable = TopProcessesSectionView(frame: NSRect(x: 0, y: 0, width: 512, height: 460))
