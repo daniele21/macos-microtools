@@ -1421,11 +1421,11 @@ final class DashboardViewController: NSViewController {
             content.topAnchor.constraint(equalTo: document.topAnchor),
             content.leadingAnchor.constraint(equalTo: document.leadingAnchor),
             content.trailingAnchor.constraint(equalTo: document.trailingAnchor),
-            content.bottomAnchor.constraint(equalTo: document.bottomAnchor),
-            // The document width is explicitly the clip width: no accidental
-            // intrinsic-size-only right alignment or horizontal scrolling.
-            content.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor)
+            content.bottomAnchor.constraint(equalTo: document.bottomAnchor)
         ])
+        // Set the document view before activating any constraint that refers to
+        // the scroll view's clip view. Prior to this, document and clip have no
+        // common ancestor and AppKit aborts with an NSGenericException.
         scroll.documentView = document
         document.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor).isActive = true
     }
