@@ -2515,6 +2515,15 @@ layoutProbe.updateTopProcesses(samples: mockProcesses, error: nil)
 assert(layoutProbe.overviewCPU.subviews.count > 0)
 assert(layoutProbe.overviewGPU.subviews.count > 0)
 assert(layoutProbe.overviewRAM.subviews.count > 0)
+// Overview is the default and can be reached again from the advanced page.
+let pageScrolls = layoutRoot.subviews.compactMap { $0 as? NSScrollView }
+assert(pageScrolls.count == 2)
+assert(!pageScrolls[0].isHidden && pageScrolls[1].isHidden)
+layoutProbe.overviewRAM.onSelect?()
+assert(pageScrolls[0].isHidden && !pageScrolls[1].isHidden)
+layoutProbe.showOverview()
+assert(!pageScrolls[0].isHidden && pageScrolls[1].isHidden)
+
 // Regression: short and long names must start at the same left edge, with the
 // full available name-column width rather than their own intrinsic width.
 let processTable = TopProcessesSectionView(frame: NSRect(x: 0, y: 0, width: 512, height: 460))
