@@ -2539,6 +2539,39 @@ layoutProbe.updateTopProcesses(samples: mockProcesses, error: nil)
 assert(layoutProbe.overviewCPU.subviews.count > 0)
 assert(layoutProbe.overviewGPU.subviews.count > 0)
 assert(layoutProbe.overviewRAM.subviews.count > 0)
+// Geometry regression from real screenshot: previously the cards occupied only
+// the right half of a 610pt popup despite the scroll view being full width.
+let layoutWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 610, height: 540),
+                            styleMask: [.titled], backing: .buffered, defer: false)
+layoutWindow.contentView = layoutRoot
+layoutRoot.layoutSubtreeIfNeeded()
+let scrollViews = layoutRoot.subviews.compactMap { $0 as? NSScrollView }
+assert(scrollViews.count == 2)
+for scroll in scrollViews {
+    scroll.layoutSubtreeIfNeeded()
+    scroll.contentView.layoutSubtreeIfNeeded()
+    scroll.documentView?.layoutSubtreeIfNeeded()
+}
+guard let overviewDocument = scrollViews[0].documentView,
+      let overviewStack = overviewDocument.subviews.first as? NSStackView,
+      let cardsStrip = overviewStack.arrangedSubviews.first as? NSStackView,
+      let detailDocument = scrollViews[1].documentView,
+      let detailStack = detailDocument.subviews.first as? NSStackView,
+      let detailColumns = detailStack.arrangedSubviews.first as? NSStackView else {
+    fatalError("missing expected overview/detail hierarchy")
+}
+assert(cardsStrip.frame.width > 510, "metric cards must fill 610pt popup, not collapse right")
+assert(abs(cardsStrip.frame.minX - overviewStack.bounds.minX) < 2)
+assert(abs(cardsStrip.frame.maxX - overviewStack.bounds.maxX) < 2)
+let cardWidths = cardsStrip.arrangedSubviews.map { $0.frame.width }
+assert(cardWidths.count == 3 && cardWidths.allSatisfy { $0 > 155 })
+assert((cardWidths.max() ?? 0) - (cardWidths.min() ?? 0) < 2)
+assert(detailColumns.frame.width > 510, "advanced CPU/RAM columns must fill popup")
+assert(abs(detailColumns.frame.minX - detailStack.bounds.minX) < 2)
+assert(abs(detailColumns.frame.maxX - detailStack.bounds.maxX) < 2)
+assert(detailColumns.arrangedSubviews.count == 2)
+let detailWidths = detailColumns.arrangedSubviews.map { $0.frame.width }
+assert(abs(detailWidths[0] - detailWidths[1]) < 2)
 // Overview is the default and can be reached again from the advanced page.
 let pageScrolls = layoutRoot.subviews.compactMap { $0 as? NSScrollView }
 assert(pageScrolls.count == 2)
