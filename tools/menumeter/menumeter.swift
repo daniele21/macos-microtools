@@ -1247,6 +1247,20 @@ final class DashboardViewController: NSViewController {
 
     let topProcesses = TopProcessesSectionView(frame: .zero)
 
+    // The overview is a different presentation of the same sampled data,
+    // not another CPU/GPU/RAM collector.
+    let overviewCPU = OverviewMetricCard(name: "CPU", symbol: "cpu", color: .systemBlue)
+    let overviewGPU = OverviewMetricCard(name: "GPU", symbol: "square.stack.3d.up", color: .systemPurple)
+    let overviewRAM = OverviewMetricCard(name: "RAM", symbol: "memorychip", color: .systemGreen)
+    let overviewProcesses = OverviewProcessesView(frame: .zero)
+    let overviewHealthLabel = NSTextField(labelWithString: "Rilevamento memoria…")
+    let overviewSwapLabel = NSTextField(labelWithString: "Swap —")
+    private let overviewScrollView = NSScrollView()
+    private let detailScrollView = NSScrollView()
+    private let modeSelector = NSSegmentedControl(
+        labels: ["Panoramica", "Dettagli"], trackingMode: .selectOne, target: nil, action: nil
+    )
+
     // Footer
     let thermalLabel = NSTextField(labelWithString: "Stato termico: Nominale")
     let copyDiagButton = NSButton(title: "Copia diagnostica", target: nil, action: nil)
@@ -1262,74 +1276,161 @@ final class DashboardViewController: NSViewController {
         root.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
         root.layer?.cornerRadius = 12
 
+        let headingTitle = NSTextField(labelWithString: "MenuMeter")
+        headingTitle.font = .systemFont(ofSize: 15, weight: .semibold)
+        let headingSubtitle = NSTextField(labelWithString: "Sistema · monitoraggio live")
+        headingSubtitle.font = .systemFont(ofSize: 10)
+        headingSubtitle.textColor = .secondaryLabelColor
+        let headingText = NSStackView(views: [headingTitle, headingSubtitle])
+        headingText.orientation = .vertical
+        headingText.spacing = 1
+        headingText.alignment = .leading
+
+        modeSelector.selectedSegment = 0
+        modeSelector.controlSize = .regular
+        modeSelector.target = self
+        modeSelector.action = #selector(modeChanged)
+        let toolbar = NSStackView(views: [headingText, modeSelector])
+        toolbar.orientation = .horizontal
+        toolbar.distribution = .fill
+        toolbar.alignment = .centerY
+        toolbar.spacing = 12
+
+        // Three equally prominent resource cards are visible immediately.
+        let cards = NSStackView(views: [overviewCPU, overviewGPU, overviewRAM])
+        cards.orientation = .horizontal
+        cards.alignment = .top
+        cards.distribution = .fillEqually
+        cards.spacing = 10
+
+        overviewHealthLabel.font = .systemFont(ofSize: 11, weight: .medium)
+        overviewHealthLabel.textColor = .secondaryLabelColor
+        overviewHealthLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        overviewSwapLabel.font = .monospacedDigitSystemFont(ofSize: 10.5, weight: .regular)
+        overviewSwapLabel.textColor = .secondaryLabelColor
+        overviewSwapLabel.alignment = .right
+        overviewSwapLabel.setContentHuggingPriority(.required, for: .horizontal)
+        let healthRow = NSStackView(views: [overviewHealthLabel, overviewSwapLabel])
+        healthRow.orientation = .horizontal
+        healthRow.distribution = .fill
+        healthRow.spacing = 12
+        healthRow.edgeInsets = NSEdgeInsets(top: 6, left: 2, bottom: 6, right: 2)
+
+        let overviewSeparator = NSBox()
+        overviewSeparator.boxType = .separator
+        let overviewContent = NSStackView(views: [cards, healthRow, overviewSeparator, overviewProcesses])
+        overviewContent.orientation = .vertical
+        overviewContent.alignment = .width
+        overviewContent.spacing = 12
+
+        configureScrollView(overviewScrollView, content: overviewContent)
+        // Advanced view preserves all existing diagnostics and full-width table.
         let cpuColumn = buildCPUColumn()
         let ramColumn = buildRAMColumn()
-
         let columns = NSStackView(views: [cpuColumn, ramColumn])
         columns.orientation = .horizontal
         columns.alignment = .top
         columns.distribution = .fillEqually
         columns.spacing = 20
+        let detailSeparator = NSBox()
+        detailSeparator.boxType = .separator
+        let detailsContent = NSStackView(views: [columns, detailSeparator, topProcesses])
+        detailsContent.orientation = .vertical
+        detailsContent.alignment = .width
+        detailsContent.spacing = 12
+        configureScrollView(detailScrollView, content: detailsContent)
+        detailScrollView.isHidden = true
 
-        // One scrollable document: resource columns, then full-width process table.
-        // The footer stays pinned outside the scrollable document.
-        let body = NSView()
-        body.translatesAutoresizingMaskIntoConstraints = false
-        let processDivider = NSBox()
-        processDivider.boxType = .separator
-        let document = NSStackView(views: [columns, processDivider, topProcesses])
-        document.orientation = .vertical
-        document.alignment = .width
-        document.spacing = 12
-        body.addSubview(document)
-        document.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            document.topAnchor.constraint(equalTo: body.topAnchor),
-            document.leadingAnchor.constraint(equalTo: body.leadingAnchor),
-            document.trailingAnchor.constraint(equalTo: body.trailingAnchor),
-            document.bottomAnchor.constraint(equalTo: body.bottomAnchor)
-        ])
-        let bodyScrollView = NSScrollView()
-        bodyScrollView.drawsBackground = false
-        bodyScrollView.borderType = .noBorder
-        bodyScrollView.hasVerticalScroller = true
-        bodyScrollView.autohidesScrollers = true
-        bodyScrollView.verticalScrollElasticity = .allowed
-        bodyScrollView.documentView = body
+        overviewCPU.onSelect = { [weak self] in self?.showDetail(at: self?.cpuTitleLabel) }
+        overviewGPU.onSelect = { [weak self] in self?.showDetail(at: self?.gpuTitleLabel) }
+        overviewRAM.onSelect = { [weak self] in self?.showDetail(at: self?.ramTitleLabel) }
+        overviewProcesses.onShowAll = { [weak self] in self?.showDetail(at: self?.topProcesses) }
 
         let separator = NSBox()
         separator.boxType = .separator
-
         let footerStack = buildFooter()
+        showProcessesButton.isHidden = true
 
-        root.addSubview(bodyScrollView)
-        root.addSubview(separator)
-        root.addSubview(footerStack)
-
-        bodyScrollView.translatesAutoresizingMaskIntoConstraints = false
-        separator.translatesAutoresizingMaskIntoConstraints = false
-        footerStack.translatesAutoresizingMaskIntoConstraints = false
+        for child in [toolbar, overviewScrollView, detailScrollView, separator, footerStack] {
+            root.addSubview(child)
+            child.translatesAutoresizingMaskIntoConstraints = false
+        }
 
         NSLayoutConstraint.activate([
-            root.widthAnchor.constraint(equalToConstant: 540),
+            root.widthAnchor.constraint(equalToConstant: 610),
 
-            bodyScrollView.topAnchor.constraint(equalTo: root.topAnchor, constant: 14),
-            bodyScrollView.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 14),
-            bodyScrollView.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -14),
-            bodyScrollView.heightAnchor.constraint(equalToConstant: 430),
-            body.widthAnchor.constraint(equalTo: bodyScrollView.contentView.widthAnchor),
+            toolbar.topAnchor.constraint(equalTo: root.topAnchor, constant: 13),
+            toolbar.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 16),
+            toolbar.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -16),
 
-            separator.topAnchor.constraint(equalTo: bodyScrollView.bottomAnchor, constant: 10),
+            overviewScrollView.topAnchor.constraint(equalTo: toolbar.bottomAnchor, constant: 10),
+            overviewScrollView.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 14),
+            overviewScrollView.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -14),
+            overviewScrollView.heightAnchor.constraint(equalToConstant: 390),
+
+            detailScrollView.topAnchor.constraint(equalTo: overviewScrollView.topAnchor),
+            detailScrollView.leadingAnchor.constraint(equalTo: overviewScrollView.leadingAnchor),
+            detailScrollView.trailingAnchor.constraint(equalTo: overviewScrollView.trailingAnchor),
+            detailScrollView.bottomAnchor.constraint(equalTo: overviewScrollView.bottomAnchor),
+
+            separator.topAnchor.constraint(equalTo: overviewScrollView.bottomAnchor, constant: 9),
             separator.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 14),
             separator.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -14),
 
             footerStack.topAnchor.constraint(equalTo: separator.bottomAnchor, constant: 8),
             footerStack.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 14),
             footerStack.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -14),
-            footerStack.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -12),
+            footerStack.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -12)
         ])
 
         self.view = root
+    }
+
+    private func configureScrollView(_ scroll: NSScrollView, content: NSStackView) {
+        scroll.drawsBackground = false
+        scroll.borderType = .noBorder
+        scroll.hasVerticalScroller = true
+        scroll.autohidesScrollers = true
+        scroll.verticalScrollElasticity = .allowed
+        let document = NSView()
+        document.translatesAutoresizingMaskIntoConstraints = false
+        document.addSubview(content)
+        content.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            content.topAnchor.constraint(equalTo: document.topAnchor),
+            content.leadingAnchor.constraint(equalTo: document.leadingAnchor),
+            content.trailingAnchor.constraint(equalTo: document.trailingAnchor),
+            content.bottomAnchor.constraint(equalTo: document.bottomAnchor)
+        ])
+        scroll.documentView = document
+        document.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor).isActive = true
+    }
+
+    func showOverview() {
+        modeSelector.selectedSegment = 0
+        showMode(0)
+    }
+
+    private func showDetail(at anchor: NSView?) {
+        modeSelector.selectedSegment = 1
+        showMode(1)
+        // Scroll only after Auto Layout has made the advanced document visible.
+        DispatchQueue.main.async { [weak self, weak anchor] in
+            guard let self = self else { return }
+            self.detailScrollView.layoutSubtreeIfNeeded()
+            if let target = anchor {
+                _ = target.scrollToVisible(target.bounds)
+            }
+        }
+    }
+
+    @objc private func modeChanged() { showMode(modeSelector.selectedSegment) }
+
+    private func showMode(_ mode: Int) {
+        let showDetails = mode == 1
+        overviewScrollView.isHidden = showDetails
+        detailScrollView.isHidden = !showDetails
+        showProcessesButton.isHidden = !showDetails
     }
 
     private func buildCPUColumn() -> NSStackView {
