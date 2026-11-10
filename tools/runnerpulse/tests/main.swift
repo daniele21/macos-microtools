@@ -75,6 +75,29 @@ check(RunnerPulseLocalPolicy.hasFreshTelemetry([local], at: freshAt1003),
       "live telemetry when fresh")
 check(!RunnerPulseLocalPolicy.hasFreshTelemetry([local], at: staleAt1010),
       "expired heartbeat must not select local dashboard")
+
+let oneRunning = RunnerPulseLocalPolicy.overview([local], at: freshAt1003)
+check(oneRunning.running == 1 && oneRunning.idle == 0 && oneRunning.other == 3,
+      "overview distinguishes one active runner from three unobserved")
+let allStale = RunnerPulseLocalPolicy.overview([local], at: staleAt1010)
+check(allStale.running == 0 && allStale.idle == 0 && allStale.other == 4,
+      "stale runner is never presented as idle or running")
+let idleJSON = Data(String(decoding: localJSON, as: UTF8.self)
+    .replacingOccurrences(of: "\"runner_id\": 2", with: "\"runner_id\": 1")
+    .replacingOccurrences(of: "\"status\": \"running\"", with: "\"status\": \"idle\"").utf8)
+let idleRunner = try decoder.decode(RunnerPulseLocalSnapshot.self, from: idleJSON)
+let mixedOverview = RunnerPulseLocalPolicy.overview([local, idleRunner], at: freshAt1003)
+check(mixedOverview.running == 1 && mixedOverview.idle == 1 && mixedOverview.other == 2,
+      "overview separates available and working runners")
+let stoppedJSON = Data(String(decoding: idleJSON, as: UTF8.self)
+    .replacingOccurrences(of: "\"status\": \"idle\"", with: "\"status\": \"stopped\"").utf8)
+let stoppedRunner = try decoder.decode(RunnerPulseLocalSnapshot.self, from: stoppedJSON)
+let stoppedOverview = RunnerPulseLocalPolicy.overview([local, stoppedRunner], at: freshAt1003)
+check(stoppedOverview.running == 1 && stoppedOverview.idle == 0 && stoppedOverview.other == 3,
+      "stopped runner is neither available nor live-working")
+let duplicateOverview = RunnerPulseLocalPolicy.overview([local, local], at: freshAt1003)
+check(duplicateOverview.running == 1 && duplicateOverview.other == 3,
+      "multiple snapshots of the same runner cannot inflate the summary")
 let refreshedJSON = try JSONDecoder().decode(RunnerPulseLocalSnapshot.self, from: Data(
     String(decoding: localJSON, as: UTF8.self).replacingOccurrences(
         of: "\"updated_at\": 1000.0", with: "\"updated_at\": 1008.0"

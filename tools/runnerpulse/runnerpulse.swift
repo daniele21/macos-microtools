@@ -284,6 +284,22 @@ enum RunnerPulseLocalPolicy {
                                     remoteConfigured: Bool) -> Bool {
         remoteConfigured && previousFresh && !currentFresh
     }
+
+    // A fresh stopped/starting runner is not idle, and an absent or expired
+    // snapshot must never be presented as an available runner.
+    static func overview(_ snapshots: [RunnerPulseLocalSnapshot],
+                         at now: Date = Date()) -> (running: Int, idle: Int, other: Int) {
+        var latest: [Int: RunnerPulseLocalSnapshot] = [:]
+        for item in snapshots where (1...4).contains(item.runner_id) && item.isFresh(now: now) {
+            if let previous = latest[item.runner_id], previous.updated_at > item.updated_at {
+                continue
+            }
+            latest[item.runner_id] = item
+        }
+        let running = latest.values.filter { $0.status == "running" }.count
+        let idle = latest.values.filter { $0.status == "idle" }.count
+        return (running, idle, 4 - running - idle)
+    }
 }
 
 enum RunnerPulseDiagnostics {
@@ -730,6 +746,7 @@ final class RunnerPulseState: ObservableObject {
     @Published var restartingObserver = false
     @Published var observerMessage: String?
     @Published var showDiagnostics = false
+    @Published var showAllActivity = false
     @Published var observerErrorLog = ""
     private var localTimer: Timer?
     private var lastLocalPollWasFresh = false
@@ -1076,246 +1093,370 @@ private struct RunnerPulseSettings: View {
 // MARK: - Local runner activity (read-only)
 
 // Only two small measurements; no graph, sensor history or extra window.
+// MARK: - RunnerPulse menubar dashboard
+
+private enum RunnerPulseStyle {
+    static let running = Color.green
+    static let warning = Color.orange
+    static let surface = Color(nsColor: .controlBackgroundColor)
+    static let stroke = Color.primary.opacity(0.075)
+}
+
 private struct RunnerResourceBars: View {
     let metrics: RunnerPulseResources?
 
-    private func bar(_ fraction: Double, color: Color) -> some View {
-        GeometryReader { geo in
-            ZStack(alignment: .leading) {
-                Capsule().fill(Color.primary.opacity(0.10))
-                Capsule().fill(color)
-                    .frame(width: max(0, geo.size.width * max(0, min(1, fraction))))
+    private func meter(_ label: String, value: String, fraction: Double, color: Color) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 6) {
+                Text(label).foregroundStyle(.secondary)
+                Spacer(minLength: 4)
+                Text(value).foregroundStyle(.primary).monospacedDigit()
             }
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.primary.opacity(0.10))
+                    Capsule().fill(color)
+                        .frame(width: geo.size.width * max(0, min(1, fraction)))
+                }
+            }
+            .frame(height: 4)
+            .accessibilityHidden(true)
         }
-        .frame(height: 4)
-        .accessibilityHidden(true)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     var body: some View {
         let active = metrics?.isValid() == true ? metrics : nil
-        HStack(spacing: 14) {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack {
-                    Text("CPU").foregroundStyle(.secondary)
-                    Spacer(minLength: 4)
-                    Text(active.map { String(format: "%.0f%%", $0.cpu_percent) } ?? "—")
-                        .monospacedDigit()
-                }
-                bar(active?.cpuFraction ?? 0,
-                    color: (active?.cpu_percent ?? 0) >= 75 ? .orange : .cyan)
-            }
-            VStack(alignment: .leading, spacing: 4) {
-                HStack {
-                    Text("RAM").foregroundStyle(.secondary)
-                    Spacer(minLength: 4)
-                    Text(active.map { String(format: "%.1f GB", $0.ramGB) } ?? "—")
-                        .monospacedDigit()
-                }
-                bar(active?.ramFraction ?? 0,
-                    color: (active?.ramFraction ?? 0) >= 0.75 ? .orange : .purple)
-            }
+        HStack(spacing: 18) {
+            meter("CPU totale", value: active.map { String(format: "%.0f%%", $0.cpu_percent) } ?? "—",
+                  fraction: active?.cpuFraction ?? 0,
+                  color: (active?.cpu_percent ?? 0) >= 75 ? .orange : .cyan)
+            meter("RAM RSS", value: active.map { String(format: "%.1f GB", $0.ramGB) } ?? "—",
+                  fraction: active?.ramFraction ?? 0,
+                  color: (active?.ramFraction ?? 0) >= 0.75 ? .orange : .purple)
         }
         .font(.system(size: 10, weight: .medium))
-        .padding(.top, 3)
-        .help("Uso stimato di Runner.Worker e dei processi figli. CPU: % della capacità totale; RAM: RSS, può includere pagine condivise.")
+        .padding(.top, 5)
+        .help("Uso stimato di Runner.Worker e figli. CPU: percentuale della capacità totale del Mac. RAM: RSS, con possibili pagine condivise.")
+    }
+}
+
+private struct RunnerSummaryTile: View {
+    let title: String
+    let count: Int
+    let icon: String
+    let tint: Color
+
+    var body: some View {
+        HStack(spacing: 9) {
+            Image(systemName: icon)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(tint)
+                .frame(width: 18)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("\(count)")
+                    .font(.system(size: 19, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
+                Text(title)
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 9)
+        .frame(maxWidth: .infinity, minHeight: 56)
+        .background(RunnerPulseStyle.surface.opacity(0.75), in: RoundedRectangle(cornerRadius: 9))
+        .overlay(RoundedRectangle(cornerRadius: 9).stroke(RunnerPulseStyle.stroke))
+        .accessibilityElement(children: .combine)
+    }
+}
+
+private struct LocalRunnerCard: View {
+    let id: Int
+    let snapshot: RunnerPulseLocalSnapshot?
+
+    private var fresh: Bool { snapshot?.isFresh() == true }
+    private var status: String { fresh ? snapshot?.status ?? "unknown" : "unobserved" }
+    private var tint: Color {
+        switch status {
+        case "running": return RunnerPulseStyle.running
+        case "idle": return .secondary
+        case "starting": return .cyan
+        default: return RunnerPulseStyle.warning
+        }
+    }
+    private var statusTitle: String {
+        switch status {
+        case "running": return "In esecuzione"
+        case "idle": return "Disponibile"
+        case "starting": return "In avvio"
+        case "stopped": return "Fermato"
+        case "unobserved": return "Non osservato"
+        default: return "Stato sconosciuto"
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: status == "running" ? 8 : 2) {
+            HStack(spacing: 7) {
+                Circle().fill(tint).frame(width: 7, height: 7)
+                    .accessibilityHidden(true)
+                Text("runner-\(id)")
+                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                Spacer(minLength: 6)
+                Text(statusTitle)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(tint)
+                if status == "running", let started = snapshot?.job?.started_at {
+                    Text(RunnerPulseCore.duration(ISO8601DateFormatter()
+                        .string(from: Date(timeIntervalSince1970: started))))
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
+            }
+
+            if status == "running" {
+                if let job = snapshot?.job {
+                    HStack(spacing: 7) {
+                        Text(job.originTitle)
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(job.attribution_status == "unresolved"
+                                ? RunnerPulseStyle.warning : Color.primary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .help(job.originTitle)
+                        Spacer(minLength: 0)
+                        Text(job.triggerTitle)
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 3)
+                            .background(Color.primary.opacity(0.065), in: Capsule())
+                            .lineLimit(1)
+                    }
+                    Text(job.name ?? "Job in esecuzione")
+                        .font(.system(size: 11))
+                        .lineLimit(1)
+                        .help(job.name ?? "Job in esecuzione")
+                    if let step = job.current_step, !step.isEmpty {
+                        Label(step, systemImage: "arrow.turn.down.right")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                            .help("Step corrente: \(step)")
+                    } else {
+                        Text("Step corrente non ancora disponibile")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
+                    }
+                    if let executor = job.execution_repository,
+                       executor != job.repository {
+                        Text("Workflow eseguito da \(executor)")
+                            .font(.system(size: 9))
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    RunnerResourceBars(metrics: snapshot?.resources)
+                    if job.sourceCommitURL != nil || safeGitHubURL(job.run_url) != nil {
+                        HStack(spacing: 15) {
+                            if let url = job.run_url, safeGitHubURL(url) != nil {
+                                Button {
+                                    openGitHub(url)
+                                } label: {
+                                    Label("Log GitHub", systemImage: "arrow.up.right")
+                                }
+                            }
+                            if let sha = job.sha, let url = job.sourceCommitURL {
+                                Button("Commit \(String(sha.prefix(8)))") {
+                                    openGitHub(url)
+                                }
+                            }
+                        }
+                        .font(.system(size: 10, weight: .medium))
+                        .buttonStyle(.plain)
+                        .foregroundStyle(Color.accentColor)
+                        .padding(.top, 2)
+                    }
+                } else {
+                    Text("Runner occupato · dettagli del job in acquisizione")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                }
+            } else if status == "unobserved" {
+                Text("Nessun heartbeat recente · stato non verificato")
+                    .font(.system(size: 10)).foregroundStyle(.secondary)
+            } else if status == "stopped" {
+                Text("Runner fermato · non disponibile per nuovi job")
+                    .font(.system(size: 10)).foregroundStyle(.secondary)
+            } else if status == "starting" {
+                Text("Avvio del servizio in corso")
+                    .font(.system(size: 10)).foregroundStyle(.secondary)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, status == "running" ? 12 : 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RunnerPulseStyle.surface.opacity(0.75), in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(
+            status == "running" ? RunnerPulseStyle.running.opacity(0.25) : RunnerPulseStyle.stroke))
+        .accessibilityElement(children: .contain)
     }
 }
 
 private struct LocalDashboard: View {
     let snapshots: [RunnerPulseLocalSnapshot]
+    @ObservedObject var state: RunnerPulseState
 
-    private func runnerColor(_ id: Int) -> Color {
-        switch id {
-        case 1: return .cyan
-        case 2: return .purple
-        case 3: return .yellow
-        default: return .green
-        }
+    private var overview: (running: Int, idle: Int, other: Int) {
+        RunnerPulseLocalPolicy.overview(snapshots)
     }
-
-    private var live: [RunnerPulseLocalSnapshot] { snapshots.filter { $0.isFresh() } }
+    private var live: [RunnerPulseLocalSnapshot] {
+        snapshots.filter { $0.isFresh() }
+    }
     private var events: [(Int, RunnerPulseLocalEvent)] {
-        Array(snapshots.filter { $0.isFresh() }.flatMap { snap in
+        Array(live.flatMap { snap in
             snap.recent_events.map { (snap.runner_id, $0) }
         }.sorted { $0.1.time > $1.1.time }.prefix(12))
     }
-
     private func eventTitle(_ event: RunnerPulseLocalEvent) -> String {
         switch event.kind {
-        case "job_started": return "Avvio: \(event.name ?? "job")"
-        case "job_completed": return "\(event.name ?? "job") · \(event.result ?? "completato")"
-        case "step_started": return event.step ?? "Step"
+        case "job_started": return "Avvio · \(event.name ?? "job")"
+        case "job_completed": return "\(event.name ?? "Job") · \(event.result ?? "completato")"
+        case "step_started": return event.step ?? "Step avviato"
         case "runner_started": return "Runner avviato"
         case "runner_stopped": return "Runner terminato"
-        default: return event.kind
+        default: return event.kind.replacingOccurrences(of: "_", with: " ")
         }
+    }
+    private func eventColor(_ event: RunnerPulseLocalEvent) -> Color {
+        if event.kind == "job_completed" {
+            return ["succeeded", "success"].contains(event.result?.lowercased() ?? "")
+                ? .green : .red
+        }
+        return event.kind == "runner_stopped" ? .orange : .secondary
     }
 
     var body: some View {
-        HStack {
-            Label("Locale · live", systemImage: "desktopcomputer")
-                .foregroundStyle(Color.green)
-            Spacer()
-            Text("\(live.filter { $0.isRunning }.count) running")
-            Text("\(live.filter { $0.isIdle }.count) idle")
-        }
-        .font(.system(size: 11, weight: .medium))
-        .padding(.horizontal, 16).padding(.vertical, 10)
-        Divider()
-        ScrollView {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    Text("WORKERS").tracking(0.8)
-                    Spacer()
-                    Text("\(live.count)/4 osservati")
-                }
-                .font(.system(size: 10, weight: .semibold)).foregroundStyle(.secondary)
-
-                ForEach(1...4, id: \.self) { id in
-                    let item = snapshots.first { $0.runner_id == id }
-                    let fresh = item?.isFresh() == true
-                    HStack(alignment: .top, spacing: 10) {
-                        RoundedRectangle(cornerRadius: 3)
-                            .fill(fresh ? runnerColor(id) : Color.gray.opacity(0.4))
-                            .frame(width: 4)
-                        VStack(alignment: .leading, spacing: 5) {
-                            HStack {
-                                Text("runner-\(id)")
-                                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                                Text(fresh ? (item?.status.uppercased() ?? "UNKNOWN") : "NON OSSERVATO")
-                                    .font(.system(size: 9, weight: .medium))
-                                    .foregroundStyle(fresh ? runnerColor(id) : Color.secondary)
-                                Spacer()
-                                if fresh, let start = item?.job?.started_at {
-                                    Text(RunnerPulseCore.duration(
-                                        ISO8601DateFormatter().string(from: Date(timeIntervalSince1970: start))))
-                                        .font(.system(size: 10, design: .monospaced))
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-                            if fresh, item?.status == "running", let job = item?.job {
-                                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                                    Text(job.originTitle)
-                                        .font(.system(size: 11, weight: .semibold))
-                                        .foregroundStyle(job.attribution_status == "unresolved" ? Color.orange : Color.primary)
-                                        .lineLimit(1)
-                                    Text(job.triggerTitle)
-                                        .font(.system(size: 9, weight: .medium))
-                                        .foregroundStyle(.secondary)
-                                        .padding(.horizontal, 6).padding(.vertical, 2)
-                                        .background(Color.secondary.opacity(0.10), in: Capsule())
-                                    Spacer(minLength: 0)
-                                }
-                                Text(job.name ?? "Job")
-                                    .font(.system(size: 11)).lineLimit(1)
-                                if let executor = job.execution_repository {
-                                    Text("Workflow in \(executor)")
-                                        .font(.system(size: 10)).foregroundStyle(.secondary)
-                                        .lineLimit(1)
-                                }
-                                if let workflow = job.workflow {
-                                    Text(workflow)
-                                        .font(.system(size: 10)).foregroundStyle(.secondary)
-                                        .lineLimit(1)
-                                }
-                                if let step = job.current_step {
-                                    Label(step, systemImage: "chevron.right")
-                                        .font(.system(size: 10)).foregroundStyle(.secondary)
-                                        .lineLimit(2)
-                                }
-                                HStack(spacing: 12) {
-                                    if let sha = job.sha, let commitURL = job.sourceCommitURL {
-                                        Button("Commit \(String(sha.prefix(8)))") {
-                                            openGitHub(commitURL)
-                                        }
-                                        .buttonStyle(.plain)
-                                        .foregroundStyle(Color.accentColor)
-                                    }
-                                    if let runURL = job.run_url, safeGitHubURL(runURL) != nil {
-                                        Button("Apri run GitHub ↗") {
-                                            openGitHub(runURL)
-                                        }
-                                        .buttonStyle(.plain)
-                                        .foregroundStyle(Color.accentColor)
-                                    }
-                                }
-                                .font(.system(size: 9, design: .monospaced))
-                                RunnerResourceBars(metrics: item?.resources)
-                            } else {
-                                Text(fresh ? (item?.status == "idle" ? "In ascolto di nuovi job" :
-                                                "Sessione \(item?.status ?? "sconosciuta")")
-                                    : "Nessun segnale recente · stato non verificato")
-                                    .font(.system(size: 10)).foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                    .padding(10)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 9))
-                }
-
-                if live.isEmpty {
-                    Label("Monitor locale non aggiornato. Avvia runners dalla versione aggiornata di local-runner-infra.", systemImage: "info.circle")
-                        .font(.system(size: 10)).foregroundStyle(.orange)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                Text("Progetto = codice testato · Workflow = repository che esegue la CI")
-                    .font(.system(size: 9)).foregroundStyle(.tertiary)
-                    .fixedSize(horizontal: false, vertical: true)
-                HStack {
-                    Text("ATTIVITÀ RECENTI").tracking(0.8)
-                    Spacer()
-                    Text("\(events.count) eventi")
-                }
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(.secondary).padding(.top, 6)
-
-                ForEach(events.indices, id: \.self) { index in
-                    let (id, event) = events[index]
-                    HStack(alignment: .top, spacing: 8) {
-                        Image(systemName: event.kind == "job_completed" ? "checkmark.circle.fill" : "circle.fill")
-                            .font(.system(size: 10))
-                            .foregroundStyle(event.kind == "job_completed"
-                                ? (event.result?.lowercased() == "succeeded" ? Color.green : Color.red)
-                                : runnerColor(id))
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("runner-\(id) · \(eventTitle(event))")
-                                .font(.system(size: 10)).lineLimit(2)
-                            if let repo = event.repository {
-                                Text(repo).font(.system(size: 9))
-                                    .foregroundStyle(.secondary).lineLimit(1)
-                            } else if event.trigger_mode == "central_request" {
-                                Text("Origine non verificata")
-                                    .font(.system(size: 9)).foregroundStyle(Color.orange)
-                            }
-                            if let executor = event.execution_repository {
-                                Text("Workflow in \(executor)")
-                                    .font(.system(size: 9)).foregroundStyle(.tertiary)
-                                    .lineLimit(1)
-                            }
-                            if let runURL = event.run_url, safeGitHubURL(runURL) != nil {
-                                Button("Log GitHub ↗") { openGitHub(runURL) }
-                                    .font(.system(size: 9))
-                                    .buttonStyle(.plain)
-                                    .foregroundStyle(Color.accentColor)
-                            }
-                        }
-                        Spacer()
-                        Text(Date(timeIntervalSince1970: event.time)
-                            .formatted(date: .omitted, time: .shortened))
-                            .font(.system(size: 9, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                    }
-                    .padding(.vertical, 3)
-                }
-                if events.isEmpty {
-                    Text("Nessun evento nella sessione corrente")
-                        .font(.system(size: 11)).foregroundStyle(.secondary)
-                }
+        VStack(spacing: 0) {
+            HStack(spacing: 7) {
+                Circle().fill(RunnerPulseStyle.running).frame(width: 6, height: 6)
+                Text("Telemetria locale")
+                    .font(.system(size: 11, weight: .semibold))
+                Spacer()
+                Text("\(live.count)/4 osservati")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
             }
-            .padding(14)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 15)
+            .padding(.top, 11)
+            .padding(.bottom, 9)
+
+            HStack(spacing: 7) {
+                RunnerSummaryTile(title: "In esecuzione", count: overview.running,
+                                  icon: "play.fill", tint: .green)
+                RunnerSummaryTile(title: "Disponibili", count: overview.idle,
+                                  icon: "checkmark.circle", tint: .secondary)
+                RunnerSummaryTile(title: "Da verificare", count: overview.other,
+                                  icon: "exclamationmark.circle",
+                                  tint: overview.other > 0 ? .orange : .secondary)
+            }
+            .padding(.horizontal, 14)
+            .padding(.bottom, 11)
+
+            Divider()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("RUNNER").tracking(0.8)
+                        Spacer()
+                        Text("Stato in tempo reale")
+                    }
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .padding(.bottom, 2)
+
+                    // Busy runners lead; idle cards remain short and unobserved
+                    // runners stay visible instead of appearing falsely idle.
+                    ForEach((1...4).sorted { a, b in
+                        let aRunning = snapshots.first { $0.runner_id == a }?.isRunning == true
+                        let bRunning = snapshots.first { $0.runner_id == b }?.isRunning == true
+                        return aRunning == bRunning ? a < b : aRunning && !bRunning
+                    }, id: \.self) { id in
+                        LocalRunnerCard(id: id, snapshot: snapshots.first { $0.runner_id == id })
+                    }
+
+                    HStack {
+                        Text("ATTIVITÀ RECENTI").tracking(0.8)
+                        Spacer()
+                        if events.count > 4 {
+                            Button(state.showAllActivity ? "Mostra meno" : "Mostra tutti (\(events.count))") {
+                                state.showAllActivity.toggle()
+                            }
+                            .font(.system(size: 10, weight: .medium))
+                            .buttonStyle(.plain)
+                            .foregroundStyle(Color.accentColor)
+                        }
+                    }
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 10)
+                    .padding(.bottom, 2)
+
+                    if events.isEmpty {
+                        Label("Nessun evento recente disponibile", systemImage: "clock")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                            .padding(.vertical, 8)
+                    }
+                    let displayed = state.showAllActivity ? events : Array(events.prefix(4))
+                    ForEach(displayed.indices, id: \.self) { index in
+                        let (id, event) = displayed[index]
+                        HStack(alignment: .top, spacing: 9) {
+                            Circle().fill(eventColor(event))
+                                .frame(width: 6, height: 6).padding(.top, 5)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("runner-\(id) · \(eventTitle(event))")
+                                    .font(.system(size: 11, weight: .medium))
+                                    .lineLimit(2)
+                                if let origin = event.repository {
+                                    Text(origin)
+                                        .font(.system(size: 10))
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+                                } else if event.trigger_mode == "central_request" {
+                                    Text("Origine non verificata")
+                                        .font(.system(size: 10))
+                                        .foregroundStyle(.orange)
+                                }
+                                if let link = event.run_url, safeGitHubURL(link) != nil {
+                                    Button("Apri log GitHub") { openGitHub(link) }
+                                        .font(.system(size: 10, weight: .medium))
+                                        .buttonStyle(.plain)
+                                        .foregroundStyle(Color.accentColor)
+                                }
+                            }
+                            Spacer(minLength: 4)
+                            Text(Date(timeIntervalSince1970: event.time)
+                                .formatted(date: .omitted, time: .shortened))
+                                .font(.system(size: 10, design: .monospaced))
+                                .monospacedDigit()
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.vertical, 5)
+                        if index < displayed.count - 1 {
+                            Divider().opacity(0.6)
+                        }
+                    }
+                }
+                .padding(14)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
     }
 }
@@ -1332,9 +1473,20 @@ private struct RunnerPulsePanel: View {
                     Text("Self-hosted GitHub Actions").font(.system(size: 10)).foregroundStyle(.secondary)
                 }
                 Spacer()
+                if state.hasLocalTelemetry {
+                    HStack(spacing: 4) {
+                        Circle().fill(Color.green).frame(width: 6, height: 6)
+                        Text("LIVE").font(.system(size: 9, weight: .semibold))
+                    }
+                    .foregroundStyle(Color.green)
+                    .padding(.trailing, 3)
+                }
                 if state.refreshing { ProgressView().controlSize(.small).scaleEffect(0.7) }
-                Button { state.refresh(force: true) } label: { Image(systemName: "arrow.clockwise") }
-                    .buttonStyle(.plain).help("Aggiorna")
+                Button {
+                    state.pollLocal()
+                    state.refresh(force: true)
+                } label: { Image(systemName: "arrow.clockwise") }
+                    .buttonStyle(.plain).help("Aggiorna stato locale e GitHub, se configurato")
                 Button { state.openDiagnostics() } label: { Image(systemName: "text.alignleft") }
                     .buttonStyle(.plain).help("Log e diagnostica")
                 Button { state.showSettings = true } label: { Image(systemName: "gearshape") }
@@ -1417,7 +1569,7 @@ private struct RunnerPulsePanel: View {
                 Divider()
             }
             if state.hasLocalTelemetry {
-                LocalDashboard(snapshots: state.localSnapshots)
+                LocalDashboard(snapshots: state.localSnapshots, state: state)
             } else if !state.configured {
                 VStack(alignment: .leading, spacing: 12) {
                     Label("Monitor locale", systemImage: "desktopcomputer").font(.headline)
@@ -1516,7 +1668,7 @@ private struct RunnerPulsePanel: View {
             .buttonStyle(.plain)
             .padding(12)
         }
-        .frame(width: 430, height: 545)
+        .frame(width: 430, height: 555)
         .background(Color(nsColor: .windowBackgroundColor))
         .sheet(isPresented: $state.showSettings) {
             RunnerPulseSettings(state: state)
@@ -1596,7 +1748,8 @@ private struct RunnerPulseDiagnosticsView: View {
 }
 
 final class RunnerPulseAppDelegate: NSObject, NSApplicationDelegate {
-    private let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+    // Stable footprint prevents other menu bar items from shifting on every update.
+    private let item = NSStatusBar.system.statusItem(withLength: 70)
     private let popover = NSPopover()
     private let state = RunnerPulseState()
     private var subscriptions = Set<AnyCancellable>()
@@ -1631,11 +1784,12 @@ final class RunnerPulseAppDelegate: NSObject, NSApplicationDelegate {
         if state.hasLocalTelemetry {
             let live = state.localSnapshots.filter { $0.isFresh() }
             let active = live.filter { $0.isRunning }.count
-            button.title = " \(active)/\(live.count)"
-            button.contentTintColor = live.isEmpty ? .systemOrange : nil
-            button.toolTip = "RunnerPulse locale · \(active) job su \(live.count) runner osservati"
+            let counts = RunnerPulseLocalPolicy.overview(live)
+            button.title = " \(counts.running)/4"
+            button.contentTintColor = counts.other > 0 ? .systemOrange : nil
+            button.toolTip = "RunnerPulse locale · \(counts.running) attivi, \(counts.idle) disponibili, \(counts.other) da verificare"
         } else if !state.configured {
-            button.title = ""
+            button.title = " —/4"
             button.contentTintColor = .systemOrange
             button.toolTip = state.hasStaleLocalTelemetry
                 ? "RunnerPulse · telemetria locale scaduta (observer da verificare)"
