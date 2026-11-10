@@ -82,7 +82,7 @@ private enum MenuBarText {
             }
             let available = value.map { $0.isFinite && $0 >= 0 } ?? false
             append("●", font: dotFont, color: available ? color : .tertiaryLabelColor)
-            append(" \(name) ", font: labelFont, color: .secondaryLabelColor)
+            append(" \(name) ", font: labelFont, color: .labelColor)
             append(percent(value), font: valueFont,
                    color: available ? color : .secondaryLabelColor)
         }
@@ -2075,6 +2075,18 @@ assert(MenuBarText.fixedWidth >= 234)
 print("MenuMeter status width: \(MenuBarText.fixedWidth)pt · case text widths: \(statusStyleCases.map { Int(ceil($0.size().width)) })pt")
 assert(statusStyleCases.allSatisfy { $0.string.contains("CPU") && $0.string.contains("GPU") && $0.string.contains("RAM") })
 assert(Set(statusStyleCases.map { $0.string.count }).count == 1)
+// CPU/GPU/RAM labels should use the foreground's primary adaptive color,
+// not the low-contrast secondary gray. Percentages keep their metric colors.
+let firstStyle = statusStyleCases[0]
+for label in ["CPU", "GPU", "RAM"] {
+    guard let range = firstStyle.string.range(of: label) else {
+        assertionFailure("missing metric label")
+        continue
+    }
+    let start = firstStyle.string.distance(from: firstStyle.string.startIndex, to: range.lowerBound)
+    let color = firstStyle.attribute(.foregroundColor, at: start, effectiveRange: nil) as? NSColor
+    assert(color == .labelColor, "metric labels should use adaptive primary text color")
+}
 assert(ProcessIdentity.bundleRoot("/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Helper.app/Contents/MacOS/Google Chrome Helper") == "/Applications/Google Chrome.app")
 assert(ProcessIdentity.bundleRoot("/opt/homebrew/bin/python3") == nil)
 assert(ProcessIdentity.applicationName("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome") == "Google Chrome")
