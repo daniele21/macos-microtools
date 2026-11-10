@@ -1,5 +1,18 @@
 # RunnerPulse · macOS menu bar GitHub Actions monitor
 
+## Interface UX: leggere lo stato senza aprire i log
+
+La vista locale è organizzata per priorità: **runners in esecuzione in alto**, con repository *di origine*, job, step corrente, durata, link ai log GitHub e i due indicatori CPU totale/RAM RSS. I runner disponibili sono mostrati come righe compatte; quelli fermati, in avvio o con heartbeat scaduto **non** sono conteggiati come disponibili.
+
+Le tre metriche della dashboard sono: **In esecuzione**, **Disponibili** e **Da verificare**. La terza include runner non osservati, fermati o in transizione: non implica necessariamente un errore. Mostra inoltre quanti runner su quattro hanno un heartbeat valido, in modo da non confondere l'assenza di telemetria con un'assenza di job.
+
+Gli eventi recenti sono ordinati dal più nuovo e limitati ai primi quattro nella vista iniziale; **Mostra tutti** espande fino a 12 eventi. I collegamenti a GitHub sono disponibili sia sui job sia sugli eventi quando esiste un URL validato, senza mostrare output raw di workflow o token nella menu bar.
+
+L'indicatore della menu bar ora ha una **larghezza fissa** e mostra il numero dei runner attivi su quattro (ad esempio, 2/4). Se non è disponibile telemetria locale e non è configurato il fallback GitHub mostra **—/4**, non uno zero ingannevole. Il colore arancione segnala uno o più runner da verificare. L'azione Aggiorna rilegge i dati locali e aggiorna GitHub solo se configurato.
+
+Questa revisione è focalizzata sulla UX SwiftUI: **non** cambia collector, gestione dei runner, frequenza del polling, né credenziali e permessi. È compatibile con la build via Command Line Tools (senza macro @State).
+
+
 A zero-dependency, Swift-native menu bar tool showing **which self-hosted runner is busy, which repository and job is using it, the current step, queues, runtime and recent failures**. Built with Apple AppKit, SwiftUI, Foundation and Security; no background agent or telemetry daemon.
 
 ## Per-runner CPU + RAM (minimal)
