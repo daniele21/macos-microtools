@@ -966,6 +966,234 @@ enum LaunchAgentManager {
     }
 }
 
+// MARK: - Overview: compact first glance, independent from sampling logic
+
+final class OverviewMetricCard: NSView {
+    private let icon = NSImageView()
+    private let nameLabel = NSTextField(labelWithString: "")
+    private let valueLabel = NSTextField(labelWithString: "—")
+    private let detailLabel = NSTextField(labelWithString: "")
+    private let bar = ProgressTrackView(height: 5)
+    private let accent: NSColor
+    var onSelect: (() -> Void)?
+
+    init(name: String, symbol: String, color: NSColor) {
+        accent = color
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.cornerRadius = 11
+        layer?.borderWidth = 0.75
+        refreshAppearance()
+
+        icon.image = NSImage(systemSymbolName: symbol, accessibilityDescription: name)
+        icon.contentTintColor = color
+        icon.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            icon.widthAnchor.constraint(equalToConstant: 15),
+            icon.heightAnchor.constraint(equalToConstant: 15)
+        ])
+
+        nameLabel.stringValue = name
+        nameLabel.font = .systemFont(ofSize: 11, weight: .semibold)
+        nameLabel.textColor = .secondaryLabelColor
+        let heading = NSStackView(views: [icon, nameLabel])
+        heading.orientation = .horizontal
+        heading.alignment = .centerY
+        heading.spacing = 6
+
+        valueLabel.font = .monospacedDigitSystemFont(ofSize: 25, weight: .semibold)
+        valueLabel.textColor = color
+        valueLabel.setContentHuggingPriority(.required, for: .vertical)
+        detailLabel.font = .systemFont(ofSize: 10.5)
+        detailLabel.textColor = .secondaryLabelColor
+        detailLabel.lineBreakMode = .byTruncatingTail
+        detailLabel.toolTip = "Apri i dettagli della risorsa"
+
+        bar.fillColor = color
+        bar.fraction = 0
+        bar.translatesAutoresizingMaskIntoConstraints = false
+        bar.heightAnchor.constraint(equalToConstant: 5).isActive = true
+
+        let stack = NSStackView(views: [heading, valueLabel, bar, detailLabel])
+        stack.orientation = .vertical
+        stack.alignment = .width
+        stack.spacing = 8
+        addSubview(stack)
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            stack.topAnchor.constraint(equalTo: topAnchor, constant: 12),
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+            stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            stack.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor, constant: -11),
+            heightAnchor.constraint(greaterThanOrEqualToConstant: 136)
+        ])
+        addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(clicked)))
+        toolTip = "Mostra dettagli \(name)"
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    private func refreshAppearance() {
+        layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
+        layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.65).cgColor
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        refreshAppearance()
+    }
+
+    func update(value: Double?, subtitle: String, fraction: Double, color: NSColor? = nil) {
+        let valid = value.map { $0.isFinite && $0 >= 0 } ?? false
+        valueLabel.stringValue = valid ? String(format: "%.0f%%", min(100, value!)) : "—"
+        valueLabel.textColor = valid ? (color ?? accent) : .secondaryLabelColor
+        bar.fillColor = color ?? accent
+        bar.fraction = valid ? min(1, max(0, fraction)) : 0
+        detailLabel.stringValue = subtitle
+    }
+
+    @objc private func clicked() { onSelect?() }
+}
+
+final class OverviewProcessRow: NSStackView {
+    private let iconView = NSImageView()
+    let nameLabel = NSTextField(labelWithString: "—")
+    private let subtitleLabel = NSTextField(labelWithString: "")
+    private let cpuLabel = NSTextField(labelWithString: "—")
+    private let ramLabel = NSTextField(labelWithString: "—")
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        orientation = .horizontal
+        alignment = .centerY
+        distribution = .fill
+        spacing = 8
+
+        iconView.imageScaling = .scaleProportionallyDown
+        iconView.translatesAutoresizingMaskIntoConstraints = false
+        iconView.widthAnchor.constraint(equalToConstant: 18).isActive = true
+        iconView.heightAnchor.constraint(equalToConstant: 18).isActive = true
+        addArrangedSubview(iconView)
+
+        nameLabel.font = .systemFont(ofSize: 11, weight: .medium)
+        nameLabel.alignment = .left
+        nameLabel.lineBreakMode = .byTruncatingTail
+        subtitleLabel.font = .systemFont(ofSize: 9)
+        subtitleLabel.textColor = .tertiaryLabelColor
+        subtitleLabel.alignment = .left
+        subtitleLabel.lineBreakMode = .byTruncatingTail
+        let names = NSStackView(views: [nameLabel, subtitleLabel])
+        names.orientation = .vertical
+        names.alignment = .width
+        names.spacing = 0
+        names.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        names.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        addArrangedSubview(names)
+
+        for (label, width) in [(cpuLabel, 58.0), (ramLabel, 93.0)] {
+            label.font = .monospacedDigitSystemFont(ofSize: 10.5, weight: .medium)
+            label.alignment = .right
+            label.translatesAutoresizingMaskIntoConstraints = false
+            label.widthAnchor.constraint(equalToConstant: width).isActive = true
+            label.setContentHuggingPriority(.required, for: .horizontal)
+            addArrangedSubview(label)
+        }
+        cpuLabel.textColor = .systemBlue
+        ramLabel.textColor = .systemGreen
+    }
+
+    required init(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    func update(_ item: ProcessDisplayItem) {
+        nameLabel.stringValue = item.name
+        subtitleLabel.stringValue = item.isGroup ? "\(item.members.count) processi · RSS stimata" : "PID \(item.representativePID)"
+        cpuLabel.stringValue = String(format: "%.0f%%", item.cpu)
+        ramLabel.stringValue = formatBytes(item.rss)
+        iconView.image = item.appPath.map { NSWorkspace.shared.icon(forFile: $0) }
+            ?? NSImage(systemSymbolName: "terminal", accessibilityDescription: "Processo")
+        toolTip = "\(item.name) · CPU \(cpuLabel.stringValue) · RSS \(ramLabel.stringValue)"
+    }
+}
+
+final class OverviewProcessesView: NSStackView {
+    private let sortSelector = NSSegmentedControl(labels: ["CPU", "RAM"], trackingMode: .selectOne, target: nil, action: nil)
+    private let statusLabel = NSTextField(labelWithString: "Caricamento processi…")
+    private let rowsStack = NSStackView()
+    private let rows: [OverviewProcessRow] = (0..<3).map { _ in OverviewProcessRow(frame: .zero) }
+    private let showAllButton = NSButton(title: "Tutti i processi ›", target: nil, action: nil)
+    private var samples: [ProcessSample] = []
+    private var currentError: String?
+    var onShowAll: (() -> Void)?
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        orientation = .vertical
+        alignment = .width
+        spacing = 8
+
+        let title = NSTextField(labelWithString: "Processi principali")
+        title.font = .systemFont(ofSize: 12, weight: .semibold)
+        sortSelector.controlSize = .small
+        sortSelector.font = .systemFont(ofSize: 10)
+        sortSelector.selectedSegment = 0
+        sortSelector.target = self
+        sortSelector.action = #selector(sortChanged)
+        let heading = NSStackView(views: [title, sortSelector])
+        heading.orientation = .horizontal
+        heading.distribution = .fill
+        addArrangedSubview(heading)
+
+        let hint = NSTextField(labelWithString: "CPU: 100% = un core  ·  RAM: RSS stimata")
+        hint.font = .systemFont(ofSize: 9.5)
+        hint.textColor = .tertiaryLabelColor
+        addArrangedSubview(hint)
+
+        statusLabel.font = .systemFont(ofSize: 11)
+        statusLabel.textColor = .secondaryLabelColor
+        addArrangedSubview(statusLabel)
+
+        rowsStack.orientation = .vertical
+        rowsStack.alignment = .width
+        rowsStack.spacing = 9
+        for row in rows {
+            rowsStack.addArrangedSubview(row)
+            row.leadingAnchor.constraint(equalTo: rowsStack.leadingAnchor).isActive = true
+            row.trailingAnchor.constraint(equalTo: rowsStack.trailingAnchor).isActive = true
+            row.isHidden = true
+        }
+        addArrangedSubview(rowsStack)
+
+        showAllButton.bezelStyle = .recessed
+        showAllButton.font = .systemFont(ofSize: 11)
+        showAllButton.target = self
+        showAllButton.action = #selector(showAllClicked)
+        addArrangedSubview(showAllButton)
+        refresh()
+    }
+
+    required init(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    func update(samples: [ProcessSample], error: String?) {
+        self.samples = samples
+        currentError = error
+        refresh()
+    }
+
+    private func refresh() {
+        let sorted = ProcessRanker.make(samples, groupApps: true, sortCPU: sortSelector.selectedSegment != 1)
+        statusLabel.isHidden = !sorted.isEmpty
+        statusLabel.stringValue = currentError ?? "Nessun processo disponibile"
+        for (index, row) in rows.enumerated() {
+            row.isHidden = index >= sorted.count
+            if index < sorted.count { row.update(sorted[index]) }
+        }
+        showAllButton.isEnabled = !sorted.isEmpty
+    }
+
+    @objc private func sortChanged() { refresh() }
+    @objc private func showAllClicked() { onShowAll?() }
+}
+
 // MARK: - DashboardViewController
 
 final class DashboardViewController: NSViewController {
