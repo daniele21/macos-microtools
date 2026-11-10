@@ -2079,12 +2079,11 @@ assert(Set(statusStyleCases.map { $0.string.count }).count == 1)
 // not the low-contrast secondary gray. Percentages keep their metric colors.
 let firstStyle = statusStyleCases[0]
 for label in ["CPU", "GPU", "RAM"] {
-    guard let range = firstStyle.string.range(of: label),
-          let index = Range(range, in: firstStyle.string) else {
+    guard let range = firstStyle.string.range(of: label) else {
         assertionFailure("missing metric label")
         continue
     }
-    let start = firstStyle.string.distance(from: firstStyle.string.startIndex, to: index.lowerBound)
+    let start = firstStyle.string.distance(from: firstStyle.string.startIndex, to: range.lowerBound)
     let color = firstStyle.attribute(.foregroundColor, at: start, effectiveRange: nil) as? NSColor
     assert(color == .labelColor, "metric labels should use adaptive primary text color")
 }
