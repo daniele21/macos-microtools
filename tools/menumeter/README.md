@@ -1,10 +1,18 @@
-# MenuMeter v4.3
+# MenuMeter v5.0
 
 A minimalist, high-performance macOS menu bar monitor for CPU, integrated GPU, RAM, Memory Pressure, Swap I/O, and Thermal State.
 
 Written in a single Swift file using native Apple frameworks (AppKit, Mach, Darwin, IOKit). Zero third-party dependencies, zero Electron, zero bloat (<45MB RAM footprint, 0% idle CPU).
 
 ---
+
+## What changed in v5.0
+
+- **First-glance overview is the default popover:** CPU, GPU and RAM as equal-sized, color-coded metric cards (percentage, slim usage bar and context), memory-health status with swap usage, and top three processes.
+- **Two-level navigation:** `Panoramica` for a quick status check, `Dettagli` for the full 60-second charts, per-core CPU, GPU renderer/tiler, unified memory, pressure history, swap I/O and the full process table. Clicking any metric card jumps to its resource details; `Tutti i processi` opens the advanced process table.
+- **Process preview:** CPU/RAM sort and recognizable app names/icons, with CPU and RAM RSS in the same row. Process metadata still refreshes only while the popup is open (at most every 6 seconds).
+- **Native AppKit, adaptive appearance:** cards and typography use native semantic colors; no extra collectors, external tools or dependencies. The overview shares the existing CPU/GPU/RAM samples and memory-pressure health assessment.
+- **Stable popup:** 610pt wide, a fixed-height scroll viewport and a pinned footer with diagnostics, login, and quit controls. The more technical view can scroll independently. Normal first-glance usage doesn't require navigating all the raw memory components.
 
 ## What changed in v4.3
 
@@ -50,7 +58,7 @@ These are pragmatic alert thresholds, not Apple-defined pressure thresholds or d
 
 ## Features
 
-- **Dashboard Layout**: Side-by-side metric columns (CPU + GPU on the left, RAM on the right), followed by a full-width Top Processi table with an opaque, solid-background `NSPopover`.
+- **Dashboard Layout**: Compact three-card overview, with the original two-column advanced diagnostics and full-width Top Processi table in the Details tab with an opaque, solid-background `NSPopover`.
 - **60-Second Sparklines**: Real-time visual history for CPU, GPU (when available), and RAM over the last 60 seconds (30 samples @ 2s).
 - **Collapsible CPU Cores**: Shows total CPU load by default, with an expandable `▾ Core` section to inspect individual core loads.
 - **True Memory Pressure**: Directly queries kernel memory pressure (`kern.memorystatus_vm_pressure_level`) with clear states:

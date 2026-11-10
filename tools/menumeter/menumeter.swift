@@ -966,6 +966,238 @@ enum LaunchAgentManager {
     }
 }
 
+// MARK: - Overview: compact first glance, independent from sampling logic
+
+final class OverviewMetricCard: NSView {
+    private let icon = NSImageView()
+    private let nameLabel = NSTextField(labelWithString: "")
+    private let valueLabel = NSTextField(labelWithString: "—")
+    private let detailLabel = NSTextField(labelWithString: "")
+    private let bar = ProgressTrackView(height: 5)
+    private let accent: NSColor
+    var onSelect: (() -> Void)?
+
+    init(name: String, symbol: String, color: NSColor) {
+        accent = color
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.cornerRadius = 11
+        layer?.borderWidth = 0.75
+        refreshAppearance()
+
+        icon.image = NSImage(systemSymbolName: symbol, accessibilityDescription: name)
+        icon.contentTintColor = color
+        icon.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            icon.widthAnchor.constraint(equalToConstant: 15),
+            icon.heightAnchor.constraint(equalToConstant: 15)
+        ])
+
+        nameLabel.stringValue = name
+        nameLabel.font = .systemFont(ofSize: 11, weight: .semibold)
+        nameLabel.textColor = .secondaryLabelColor
+        let heading = NSStackView(views: [icon, nameLabel])
+        heading.orientation = .horizontal
+        heading.alignment = .centerY
+        heading.spacing = 6
+
+        valueLabel.font = .monospacedDigitSystemFont(ofSize: 25, weight: .semibold)
+        valueLabel.textColor = color
+        valueLabel.setContentHuggingPriority(.required, for: .vertical)
+        detailLabel.font = .systemFont(ofSize: 10.5)
+        detailLabel.textColor = .secondaryLabelColor
+        detailLabel.lineBreakMode = .byTruncatingTail
+        detailLabel.toolTip = "Apri i dettagli della risorsa"
+
+        bar.fillColor = color
+        bar.fraction = 0
+        bar.translatesAutoresizingMaskIntoConstraints = false
+        bar.heightAnchor.constraint(equalToConstant: 5).isActive = true
+
+        let stack = NSStackView(views: [heading, valueLabel, bar, detailLabel])
+        stack.orientation = .vertical
+        stack.alignment = .width
+        stack.spacing = 8
+        addSubview(stack)
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            stack.topAnchor.constraint(equalTo: topAnchor, constant: 12),
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+            stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            stack.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor, constant: -11),
+            heightAnchor.constraint(greaterThanOrEqualToConstant: 136)
+        ])
+        addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(clicked)))
+        toolTip = "Mostra dettagli \(name)"
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    private func refreshAppearance() {
+        layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
+        layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.65).cgColor
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        refreshAppearance()
+    }
+
+    func update(value: Double?, subtitle: String, fraction: Double, color: NSColor? = nil) {
+        let valid = value.map { $0.isFinite && $0 >= 0 } ?? false
+        valueLabel.stringValue = valid ? String(format: "%.0f%%", min(100, value!)) : "—"
+        valueLabel.textColor = valid ? (color ?? accent) : .secondaryLabelColor
+        bar.fillColor = color ?? accent
+        bar.fraction = valid ? min(1, max(0, fraction)) : 0
+        detailLabel.stringValue = subtitle
+    }
+
+    @objc private func clicked() { onSelect?() }
+}
+
+final class OverviewProcessRow: NSStackView {
+    private let iconView = NSImageView()
+    let nameLabel = NSTextField(labelWithString: "—")
+    private let subtitleLabel = NSTextField(labelWithString: "")
+    private let cpuLabel = NSTextField(labelWithString: "—")
+    private let ramLabel = NSTextField(labelWithString: "—")
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        orientation = .horizontal
+        alignment = .centerY
+        distribution = .fill
+        spacing = 8
+
+        iconView.imageScaling = .scaleProportionallyDown
+        iconView.translatesAutoresizingMaskIntoConstraints = false
+        iconView.widthAnchor.constraint(equalToConstant: 18).isActive = true
+        iconView.heightAnchor.constraint(equalToConstant: 18).isActive = true
+        addArrangedSubview(iconView)
+
+        nameLabel.font = .systemFont(ofSize: 11, weight: .medium)
+        nameLabel.alignment = .left
+        nameLabel.lineBreakMode = .byTruncatingTail
+        subtitleLabel.font = .systemFont(ofSize: 9)
+        subtitleLabel.textColor = .tertiaryLabelColor
+        subtitleLabel.alignment = .left
+        subtitleLabel.lineBreakMode = .byTruncatingTail
+        let names = NSStackView(views: [nameLabel, subtitleLabel])
+        names.orientation = .vertical
+        names.alignment = .width
+        names.spacing = 0
+        names.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        names.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        addArrangedSubview(names)
+
+        for (label, width) in [(cpuLabel, 58.0), (ramLabel, 93.0)] {
+            label.font = .monospacedDigitSystemFont(ofSize: 10.5, weight: .medium)
+            label.alignment = .right
+            label.translatesAutoresizingMaskIntoConstraints = false
+            label.widthAnchor.constraint(equalToConstant: width).isActive = true
+            label.setContentHuggingPriority(.required, for: .horizontal)
+            addArrangedSubview(label)
+        }
+        cpuLabel.textColor = .systemBlue
+        ramLabel.textColor = .systemGreen
+    }
+
+    required init(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    func update(_ item: ProcessDisplayItem) {
+        nameLabel.stringValue = item.name
+        subtitleLabel.stringValue = item.isGroup ? "\(item.members.count) processi · RSS stimata" : "PID \(item.representativePID)"
+        cpuLabel.stringValue = String(format: "%.0f%%", item.cpu)
+        ramLabel.stringValue = formatBytes(item.rss)
+        iconView.image = item.appPath.map { NSWorkspace.shared.icon(forFile: $0) }
+            ?? NSImage(systemSymbolName: "terminal", accessibilityDescription: "Processo")
+        toolTip = "\(item.name) · CPU \(cpuLabel.stringValue) · RSS \(ramLabel.stringValue)"
+    }
+}
+
+final class OverviewProcessesView: NSStackView {
+    private let sortSelector = NSSegmentedControl(labels: ["CPU", "RAM"], trackingMode: .selectOne, target: nil, action: nil)
+    private let statusLabel = NSTextField(labelWithString: "Caricamento processi…")
+    private let rowsStack = NSStackView()
+    private let rows: [OverviewProcessRow] = (0..<3).map { _ in OverviewProcessRow(frame: .zero) }
+    private let showAllButton = NSButton(title: "Tutti i processi ›", target: nil, action: nil)
+    private var samples: [ProcessSample] = []
+    private var currentError: String?
+    var onShowAll: (() -> Void)?
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        orientation = .vertical
+        alignment = .width
+        spacing = 8
+
+        let title = NSTextField(labelWithString: "Processi principali")
+        title.font = .systemFont(ofSize: 12, weight: .semibold)
+        sortSelector.controlSize = .small
+        sortSelector.font = .systemFont(ofSize: 10)
+        sortSelector.selectedSegment = 0
+        sortSelector.target = self
+        sortSelector.action = #selector(sortChanged)
+        let heading = NSStackView(views: [title, sortSelector])
+        heading.orientation = .horizontal
+        heading.distribution = .fill
+        addArrangedSubview(heading)
+        heading.leadingAnchor.constraint(equalTo: leadingAnchor).isActive = true
+        heading.trailingAnchor.constraint(equalTo: trailingAnchor).isActive = true
+
+        let hint = NSTextField(labelWithString: "CPU: 100% = un core  ·  RAM: RSS stimata")
+        hint.font = .systemFont(ofSize: 9.5)
+        hint.textColor = .tertiaryLabelColor
+        addArrangedSubview(hint)
+
+        statusLabel.font = .systemFont(ofSize: 11)
+        statusLabel.textColor = .secondaryLabelColor
+        addArrangedSubview(statusLabel)
+
+        rowsStack.orientation = .vertical
+        rowsStack.alignment = .width
+        rowsStack.spacing = 9
+        for row in rows {
+            rowsStack.addArrangedSubview(row)
+            row.leadingAnchor.constraint(equalTo: rowsStack.leadingAnchor).isActive = true
+            row.trailingAnchor.constraint(equalTo: rowsStack.trailingAnchor).isActive = true
+            row.isHidden = true
+        }
+        addArrangedSubview(rowsStack)
+        rowsStack.leadingAnchor.constraint(equalTo: leadingAnchor).isActive = true
+        rowsStack.trailingAnchor.constraint(equalTo: trailingAnchor).isActive = true
+
+        showAllButton.bezelStyle = .recessed
+        showAllButton.font = .systemFont(ofSize: 11)
+        showAllButton.target = self
+        showAllButton.action = #selector(showAllClicked)
+        addArrangedSubview(showAllButton)
+        refresh()
+    }
+
+    required init(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    func update(samples: [ProcessSample], error: String?) {
+        self.samples = samples
+        currentError = error
+        refresh()
+    }
+
+    private func refresh() {
+        let sorted = ProcessRanker.make(samples, groupApps: true, sortCPU: sortSelector.selectedSegment != 1)
+        statusLabel.isHidden = !sorted.isEmpty
+        statusLabel.stringValue = currentError ?? "Nessun processo disponibile"
+        for (index, row) in rows.enumerated() {
+            row.isHidden = index >= sorted.count
+            if index < sorted.count { row.update(sorted[index]) }
+        }
+        showAllButton.isEnabled = !sorted.isEmpty
+    }
+
+    @objc private func sortChanged() { refresh() }
+    @objc private func showAllClicked() { onShowAll?() }
+}
+
 // MARK: - DashboardViewController
 
 final class DashboardViewController: NSViewController {
@@ -1019,6 +1251,20 @@ final class DashboardViewController: NSViewController {
 
     let topProcesses = TopProcessesSectionView(frame: .zero)
 
+    // The overview is a different presentation of the same sampled data,
+    // not another CPU/GPU/RAM collector.
+    let overviewCPU = OverviewMetricCard(name: "CPU", symbol: "cpu", color: .systemBlue)
+    let overviewGPU = OverviewMetricCard(name: "GPU", symbol: "square.stack.3d.up", color: .systemPurple)
+    let overviewRAM = OverviewMetricCard(name: "RAM", symbol: "memorychip", color: .systemGreen)
+    let overviewProcesses = OverviewProcessesView(frame: .zero)
+    let overviewHealthLabel = NSTextField(labelWithString: "Rilevamento memoria…")
+    let overviewSwapLabel = NSTextField(labelWithString: "Swap —")
+    private let overviewScrollView = NSScrollView()
+    private let detailScrollView = NSScrollView()
+    private let modeSelector = NSSegmentedControl(
+        labels: ["Panoramica", "Dettagli"], trackingMode: .selectOne, target: nil, action: nil
+    )
+
     // Footer
     let thermalLabel = NSTextField(labelWithString: "Stato termico: Nominale")
     let copyDiagButton = NSButton(title: "Copia diagnostica", target: nil, action: nil)
@@ -1034,74 +1280,181 @@ final class DashboardViewController: NSViewController {
         root.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
         root.layer?.cornerRadius = 12
 
+        let headingTitle = NSTextField(labelWithString: "MenuMeter")
+        headingTitle.font = .systemFont(ofSize: 15, weight: .semibold)
+        let headingSubtitle = NSTextField(labelWithString: "Sistema · monitoraggio live")
+        headingSubtitle.font = .systemFont(ofSize: 10)
+        headingSubtitle.textColor = .secondaryLabelColor
+        let headingText = NSStackView(views: [headingTitle, headingSubtitle])
+        headingText.orientation = .vertical
+        headingText.spacing = 1
+        headingText.alignment = .leading
+
+        modeSelector.selectedSegment = 0
+        modeSelector.controlSize = .regular
+        modeSelector.target = self
+        modeSelector.action = #selector(modeChanged)
+        let toolbar = NSStackView(views: [headingText, modeSelector])
+        toolbar.orientation = .horizontal
+        toolbar.distribution = .fill
+        toolbar.alignment = .centerY
+        toolbar.spacing = 12
+
+        // Three equally prominent resource cards are visible immediately.
+        let cards = NSStackView(views: [overviewCPU, overviewGPU, overviewRAM])
+        cards.orientation = .horizontal
+        cards.alignment = .top
+        cards.distribution = .fillEqually
+        cards.spacing = 10
+
+        overviewHealthLabel.font = .systemFont(ofSize: 11, weight: .medium)
+        overviewHealthLabel.textColor = .secondaryLabelColor
+        overviewHealthLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        overviewSwapLabel.font = .monospacedDigitSystemFont(ofSize: 10.5, weight: .regular)
+        overviewSwapLabel.textColor = .secondaryLabelColor
+        overviewSwapLabel.alignment = .right
+        overviewSwapLabel.setContentHuggingPriority(.required, for: .horizontal)
+        let healthRow = NSStackView(views: [overviewHealthLabel, overviewSwapLabel])
+        healthRow.orientation = .horizontal
+        healthRow.distribution = .fill
+        healthRow.spacing = 12
+        healthRow.edgeInsets = NSEdgeInsets(top: 6, left: 2, bottom: 6, right: 2)
+
+        let overviewSeparator = NSBox()
+        overviewSeparator.boxType = .separator
+        let overviewContent = NSStackView(views: [cards, healthRow, overviewSeparator, overviewProcesses])
+        overviewContent.orientation = .vertical
+        overviewContent.alignment = .width
+        overviewContent.spacing = 12
+        // A vertical NSStackView's alignment alone does not guarantee that
+        // horizontal groups fill its width. Anchor every full-width section.
+        for section in [cards, healthRow, overviewProcesses] {
+            section.leadingAnchor.constraint(equalTo: overviewContent.leadingAnchor).isActive = true
+            section.trailingAnchor.constraint(equalTo: overviewContent.trailingAnchor).isActive = true
+        }
+        // Force all three cards to share the available width rather than
+        // deriving the entire strip's size from their intrinsic subviews.
+        overviewCPU.widthAnchor.constraint(equalTo: overviewGPU.widthAnchor).isActive = true
+        overviewGPU.widthAnchor.constraint(equalTo: overviewRAM.widthAnchor).isActive = true
+
+        configureScrollView(overviewScrollView, content: overviewContent)
+        // Advanced view preserves all existing diagnostics and full-width table.
         let cpuColumn = buildCPUColumn()
         let ramColumn = buildRAMColumn()
-
         let columns = NSStackView(views: [cpuColumn, ramColumn])
         columns.orientation = .horizontal
         columns.alignment = .top
         columns.distribution = .fillEqually
         columns.spacing = 20
+        let detailSeparator = NSBox()
+        detailSeparator.boxType = .separator
+        let detailsContent = NSStackView(views: [columns, detailSeparator, topProcesses])
+        detailsContent.orientation = .vertical
+        detailsContent.alignment = .width
+        detailsContent.spacing = 12
+        // Match the advanced columns and process table to the same content
+        // edges; their metrics retain their internal alignment.
+        for section in [columns, topProcesses] {
+            section.leadingAnchor.constraint(equalTo: detailsContent.leadingAnchor).isActive = true
+            section.trailingAnchor.constraint(equalTo: detailsContent.trailingAnchor).isActive = true
+        }
+        cpuColumn.widthAnchor.constraint(equalTo: ramColumn.widthAnchor).isActive = true
+        configureScrollView(detailScrollView, content: detailsContent)
+        detailScrollView.isHidden = true
 
-        // One scrollable document: resource columns, then full-width process table.
-        // The footer stays pinned outside the scrollable document.
-        let body = NSView()
-        body.translatesAutoresizingMaskIntoConstraints = false
-        let processDivider = NSBox()
-        processDivider.boxType = .separator
-        let document = NSStackView(views: [columns, processDivider, topProcesses])
-        document.orientation = .vertical
-        document.alignment = .width
-        document.spacing = 12
-        body.addSubview(document)
-        document.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            document.topAnchor.constraint(equalTo: body.topAnchor),
-            document.leadingAnchor.constraint(equalTo: body.leadingAnchor),
-            document.trailingAnchor.constraint(equalTo: body.trailingAnchor),
-            document.bottomAnchor.constraint(equalTo: body.bottomAnchor)
-        ])
-        let bodyScrollView = NSScrollView()
-        bodyScrollView.drawsBackground = false
-        bodyScrollView.borderType = .noBorder
-        bodyScrollView.hasVerticalScroller = true
-        bodyScrollView.autohidesScrollers = true
-        bodyScrollView.verticalScrollElasticity = .allowed
-        bodyScrollView.documentView = body
+        overviewCPU.onSelect = { [weak self] in self?.showDetail(at: self?.cpuTitleLabel) }
+        overviewGPU.onSelect = { [weak self] in self?.showDetail(at: self?.gpuTitleLabel) }
+        overviewRAM.onSelect = { [weak self] in self?.showDetail(at: self?.ramTitleLabel) }
+        overviewProcesses.onShowAll = { [weak self] in self?.showDetail(at: self?.topProcesses) }
 
         let separator = NSBox()
         separator.boxType = .separator
-
         let footerStack = buildFooter()
+        showProcessesButton.isHidden = true
 
-        root.addSubview(bodyScrollView)
-        root.addSubview(separator)
-        root.addSubview(footerStack)
-
-        bodyScrollView.translatesAutoresizingMaskIntoConstraints = false
-        separator.translatesAutoresizingMaskIntoConstraints = false
-        footerStack.translatesAutoresizingMaskIntoConstraints = false
+        for child in [toolbar, overviewScrollView, detailScrollView, separator, footerStack] {
+            root.addSubview(child)
+            child.translatesAutoresizingMaskIntoConstraints = false
+        }
 
         NSLayoutConstraint.activate([
-            root.widthAnchor.constraint(equalToConstant: 540),
+            root.widthAnchor.constraint(equalToConstant: 610),
 
-            bodyScrollView.topAnchor.constraint(equalTo: root.topAnchor, constant: 14),
-            bodyScrollView.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 14),
-            bodyScrollView.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -14),
-            bodyScrollView.heightAnchor.constraint(equalToConstant: 430),
-            body.widthAnchor.constraint(equalTo: bodyScrollView.contentView.widthAnchor),
+            toolbar.topAnchor.constraint(equalTo: root.topAnchor, constant: 13),
+            toolbar.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 16),
+            toolbar.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -16),
 
-            separator.topAnchor.constraint(equalTo: bodyScrollView.bottomAnchor, constant: 10),
+            overviewScrollView.topAnchor.constraint(equalTo: toolbar.bottomAnchor, constant: 10),
+            overviewScrollView.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 14),
+            overviewScrollView.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -14),
+            overviewScrollView.heightAnchor.constraint(equalToConstant: 390),
+
+            detailScrollView.topAnchor.constraint(equalTo: overviewScrollView.topAnchor),
+            detailScrollView.leadingAnchor.constraint(equalTo: overviewScrollView.leadingAnchor),
+            detailScrollView.trailingAnchor.constraint(equalTo: overviewScrollView.trailingAnchor),
+            detailScrollView.bottomAnchor.constraint(equalTo: overviewScrollView.bottomAnchor),
+
+            separator.topAnchor.constraint(equalTo: overviewScrollView.bottomAnchor, constant: 9),
             separator.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 14),
             separator.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -14),
 
             footerStack.topAnchor.constraint(equalTo: separator.bottomAnchor, constant: 8),
             footerStack.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 14),
             footerStack.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -14),
-            footerStack.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -12),
+            footerStack.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -12)
         ])
 
         self.view = root
+    }
+
+    private func configureScrollView(_ scroll: NSScrollView, content: NSStackView) {
+        scroll.drawsBackground = false
+        scroll.borderType = .noBorder
+        scroll.hasVerticalScroller = true
+        scroll.autohidesScrollers = true
+        scroll.verticalScrollElasticity = .allowed
+        let document = NSView()
+        document.translatesAutoresizingMaskIntoConstraints = false
+        document.addSubview(content)
+        content.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            content.topAnchor.constraint(equalTo: document.topAnchor),
+            content.leadingAnchor.constraint(equalTo: document.leadingAnchor),
+            content.trailingAnchor.constraint(equalTo: document.trailingAnchor),
+            content.bottomAnchor.constraint(equalTo: document.bottomAnchor)
+        ])
+        // Set the document view before activating any constraint that refers to
+        // the scroll view's clip view. Prior to this, document and clip have no
+        // common ancestor and AppKit aborts with an NSGenericException.
+        scroll.documentView = document
+        document.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor).isActive = true
+    }
+
+    func showOverview() {
+        modeSelector.selectedSegment = 0
+        showMode(0)
+    }
+
+    private func showDetail(at anchor: NSView?) {
+        modeSelector.selectedSegment = 1
+        showMode(1)
+        // Scroll only after Auto Layout has made the advanced document visible.
+        DispatchQueue.main.async { [weak self, weak anchor] in
+            guard let self = self else { return }
+            self.detailScrollView.layoutSubtreeIfNeeded()
+            if let target = anchor {
+                _ = target.scrollToVisible(target.bounds)
+            }
+        }
+    }
+
+    @objc private func modeChanged() { showMode(modeSelector.selectedSegment) }
+
+    private func showMode(_ mode: Int) {
+        let showDetails = mode == 1
+        overviewScrollView.isHidden = showDetails
+        detailScrollView.isHidden = !showDetails
+        showProcessesButton.isHidden = !showDetails
     }
 
     private func buildCPUColumn() -> NSStackView {
@@ -1348,7 +1701,7 @@ final class DashboardViewController: NSViewController {
         line1.distribution = .fill
 
         // Line 2: Version, Auto-start, Quit
-        let appTitle = NSTextField(labelWithString: "MenuMeter v4.3")
+        let appTitle = NSTextField(labelWithString: "MenuMeter v5.0")
         appTitle.font = .systemFont(ofSize: 11, weight: .medium)
         appTitle.textColor = .tertiaryLabelColor
         appTitle.isBezeled = false
@@ -1390,8 +1743,7 @@ final class DashboardViewController: NSViewController {
     }
 
     @objc private func showProcessesClicked() {
-        // The process table is below the resource charts in the scrollable pane.
-        _ = topProcesses.scrollToVisible(topProcesses.bounds)
+        showDetail(at: topProcesses)
     }
 
     @objc private func copyDiagClicked() {
@@ -1408,6 +1760,7 @@ final class DashboardViewController: NSViewController {
 
     func updateCPU(total: Double, history: [Double], cores: [Double], smoothedColor: NSColor) {
         cpuValueLabel.stringValue = String(format: "%.0f%%", total)
+        overviewCPU.update(value: total, subtitle: "\(cores.count) core CPU", fraction: total / 100, color: smoothedColor)
         cpuValueLabel.textColor = smoothedColor
         cpuSparklineView.strokeColor = smoothedColor
         cpuSparklineView.fillColor = smoothedColor.withAlphaComponent(0.18)
@@ -1448,6 +1801,9 @@ final class DashboardViewController: NSViewController {
 
     func updateGPU(devices: [GPUDeviceSample], history: [Double]) {
         let peak = devices.compactMap { $0.utilization }.max()
+        let coreCount = devices.compactMap { $0.coreCount }.reduce(0, +)
+        let gpuSubtitle = coreCount > 0 ? "\(coreCount) core GPU" : "GPU integrata"
+        overviewGPU.update(value: peak, subtitle: gpuSubtitle, fraction: (peak ?? 0) / 100)
         gpuValueLabel.stringValue = peak.map { String(format: "%.0f%%", $0) } ?? "—"
         gpuValueLabel.textColor = peak == nil ? .secondaryLabelColor : .systemPurple
         gpuSparklineView.values = peak == nil ? [] : history
@@ -1543,6 +1899,16 @@ final class DashboardViewController: NSViewController {
         let totalGiB = total / gib
         let usedGiB = used / gib
         let usedPct = total == 0 ? 0 : 100.0 * (used / total)
+        let memoryColor: NSColor = health.severity == 2 ? .systemRed : (health.severity == 1 ? .systemOrange : .systemGreen)
+        overviewRAM.update(
+            value: usedPct,
+            subtitle: String(format: "%.1f / %.1f GiB", usedGiB, totalGiB),
+            fraction: usedPct / 100, color: memoryColor
+        )
+        overviewHealthLabel.stringValue = health.status
+        overviewHealthLabel.textColor = health.severity == 2 ? .systemRed
+            : (health.severity == 1 ? .systemOrange : (pressure?.level == 1 ? .systemGreen : .secondaryLabelColor))
+        overviewSwapLabel.stringValue = "Swap " + (swapUsed.map(formatBytes) ?? "—")
         ramValueLabel.stringValue = String(format: "%.1f / %.1f GiB (%.0f%%)", usedGiB, totalGiB, usedPct)
 
         ramSparklineView.values = history
@@ -1616,6 +1982,7 @@ final class DashboardViewController: NSViewController {
 
     func updateTopProcesses(samples: [ProcessSample], error: String?) {
         topProcesses.update(samples: samples, error: error)
+        overviewProcesses.update(samples: samples, error: error)
     }
 }
 
@@ -1708,6 +2075,7 @@ final class MenuMeter: NSObject, NSPopoverDelegate {
             return
         }
 
+        dashboard.showOverview()
         update()
         popover.contentSize = dashboard.view.fittingSize
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
@@ -2163,6 +2531,56 @@ let layoutRoot = layoutProbe.view
 assert(layoutRoot.fittingSize.width >= 540)
 layoutProbe.updateTopProcesses(samples: mockProcesses, error: nil)
 assert(layoutProbe.topProcesses.arrangedSubviews.count >= 4)
+assert(layoutProbe.overviewProcesses.arrangedSubviews.count >= 4)
+layoutProbe.showOverview()
+layoutProbe.updateCPU(total: 42, history: [42], cores: [40, 44], smoothedColor: .systemBlue)
+layoutProbe.updateGPU(devices: [], history: [])
+layoutProbe.updateTopProcesses(samples: mockProcesses, error: nil)
+assert(layoutProbe.overviewCPU.subviews.count > 0)
+assert(layoutProbe.overviewGPU.subviews.count > 0)
+assert(layoutProbe.overviewRAM.subviews.count > 0)
+// Geometry regression from real screenshot: previously the cards occupied only
+// the right half of a 610pt popup despite the scroll view being full width.
+let layoutWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 610, height: 540),
+                            styleMask: [.titled], backing: .buffered, defer: false)
+layoutWindow.contentView = layoutRoot
+layoutRoot.layoutSubtreeIfNeeded()
+let scrollViews = layoutRoot.subviews.compactMap { $0 as? NSScrollView }
+assert(scrollViews.count == 2)
+for scroll in scrollViews {
+    scroll.layoutSubtreeIfNeeded()
+    scroll.contentView.layoutSubtreeIfNeeded()
+    scroll.documentView?.layoutSubtreeIfNeeded()
+}
+guard let overviewDocument = scrollViews[0].documentView,
+      let overviewStack = overviewDocument.subviews.first as? NSStackView,
+      let cardsStrip = overviewStack.arrangedSubviews.first as? NSStackView,
+      let detailDocument = scrollViews[1].documentView,
+      let detailStack = detailDocument.subviews.first as? NSStackView,
+      let detailColumns = detailStack.arrangedSubviews.first as? NSStackView else {
+    fatalError("missing expected overview/detail hierarchy")
+}
+assert(cardsStrip.frame.width > 510, "metric cards must fill 610pt popup, not collapse right")
+assert(abs(cardsStrip.frame.minX - overviewStack.bounds.minX) < 2)
+assert(abs(cardsStrip.frame.maxX - overviewStack.bounds.maxX) < 2)
+let cardWidths = cardsStrip.arrangedSubviews.map { $0.frame.width }
+assert(cardWidths.count == 3 && cardWidths.allSatisfy { $0 > 155 })
+assert((cardWidths.max() ?? 0) - (cardWidths.min() ?? 0) < 2)
+assert(detailColumns.frame.width > 510, "advanced CPU/RAM columns must fill popup")
+assert(abs(detailColumns.frame.minX - detailStack.bounds.minX) < 2)
+assert(abs(detailColumns.frame.maxX - detailStack.bounds.maxX) < 2)
+assert(detailColumns.arrangedSubviews.count == 2)
+let detailWidths = detailColumns.arrangedSubviews.map { $0.frame.width }
+assert(abs(detailWidths[0] - detailWidths[1]) < 2)
+// Overview is the default and can be reached again from the advanced page.
+let pageScrolls = layoutRoot.subviews.compactMap { $0 as? NSScrollView }
+assert(pageScrolls.count == 2)
+assert(!pageScrolls[0].isHidden && pageScrolls[1].isHidden)
+layoutProbe.overviewRAM.onSelect?()
+assert(pageScrolls[0].isHidden && !pageScrolls[1].isHidden)
+layoutProbe.showOverview()
+assert(!pageScrolls[0].isHidden && pageScrolls[1].isHidden)
+
 // Regression: short and long names must start at the same left edge, with the
 // full available name-column width rather than their own intrinsic width.
 let processTable = TopProcessesSectionView(frame: NSRect(x: 0, y: 0, width: 512, height: 460))
