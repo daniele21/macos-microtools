@@ -1142,6 +1142,8 @@ final class OverviewProcessesView: NSStackView {
         heading.orientation = .horizontal
         heading.distribution = .fill
         addArrangedSubview(heading)
+        heading.leadingAnchor.constraint(equalTo: leadingAnchor).isActive = true
+        heading.trailingAnchor.constraint(equalTo: trailingAnchor).isActive = true
 
         let hint = NSTextField(labelWithString: "CPU: 100% = un core  ·  RAM: RSS stimata")
         hint.font = .systemFont(ofSize: 9.5)
@@ -1162,6 +1164,8 @@ final class OverviewProcessesView: NSStackView {
             row.isHidden = true
         }
         addArrangedSubview(rowsStack)
+        rowsStack.leadingAnchor.constraint(equalTo: leadingAnchor).isActive = true
+        rowsStack.trailingAnchor.constraint(equalTo: trailingAnchor).isActive = true
 
         showAllButton.bezelStyle = .recessed
         showAllButton.font = .systemFont(ofSize: 11)
@@ -1322,6 +1326,16 @@ final class DashboardViewController: NSViewController {
         overviewContent.orientation = .vertical
         overviewContent.alignment = .width
         overviewContent.spacing = 12
+        // A vertical NSStackView's alignment alone does not guarantee that
+        // horizontal groups fill its width. Anchor every full-width section.
+        for section in [cards, healthRow, overviewProcesses] {
+            section.leadingAnchor.constraint(equalTo: overviewContent.leadingAnchor).isActive = true
+            section.trailingAnchor.constraint(equalTo: overviewContent.trailingAnchor).isActive = true
+        }
+        // Force all three cards to share the available width rather than
+        // deriving the entire strip's size from their intrinsic subviews.
+        overviewCPU.widthAnchor.constraint(equalTo: overviewGPU.widthAnchor).isActive = true
+        overviewGPU.widthAnchor.constraint(equalTo: overviewRAM.widthAnchor).isActive = true
 
         configureScrollView(overviewScrollView, content: overviewContent)
         // Advanced view preserves all existing diagnostics and full-width table.
@@ -1338,6 +1352,13 @@ final class DashboardViewController: NSViewController {
         detailsContent.orientation = .vertical
         detailsContent.alignment = .width
         detailsContent.spacing = 12
+        // Match the advanced columns and process table to the same content
+        // edges; their metrics retain their internal alignment.
+        for section in [columns, topProcesses] {
+            section.leadingAnchor.constraint(equalTo: detailsContent.leadingAnchor).isActive = true
+            section.trailingAnchor.constraint(equalTo: detailsContent.trailingAnchor).isActive = true
+        }
+        cpuColumn.widthAnchor.constraint(equalTo: ramColumn.widthAnchor).isActive = true
         configureScrollView(detailScrollView, content: detailsContent)
         detailScrollView.isHidden = true
 
@@ -1400,7 +1421,10 @@ final class DashboardViewController: NSViewController {
             content.topAnchor.constraint(equalTo: document.topAnchor),
             content.leadingAnchor.constraint(equalTo: document.leadingAnchor),
             content.trailingAnchor.constraint(equalTo: document.trailingAnchor),
-            content.bottomAnchor.constraint(equalTo: document.bottomAnchor)
+            content.bottomAnchor.constraint(equalTo: document.bottomAnchor),
+            // The document width is explicitly the clip width: no accidental
+            // intrinsic-size-only right alignment or horizontal scrolling.
+            content.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor)
         ])
         scroll.documentView = document
         document.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor).isActive = true
