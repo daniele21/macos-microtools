@@ -22,6 +22,30 @@ does **not** enable a login item or modify Claude Code settings.
 To opt into login startup: `make enable-llmpulse-login`.
 To disable it: `make disable-llmpulse-login`.
 
+### If macOS refuses to open LLMPulse (-10825)
+
+LaunchServices error `-10825` means the binary requires a newer macOS
+version than the machine currently runs. `Info.plist` alone cannot override
+the Mach-O deployment target, so LLMPulse explicitly compiles the app **and**
+the Claude ingest helper with minimum macOS 13.0.
+
+On the Mac, after updating your checkout:
+
+```bash
+sw_vers -productVersion    # Must be 13.0 or later
+make refresh-llmpulse      # Force rebuild, reinstall, and open
+xcrun vtool -show-build "$HOME/.local/opt/LLMPulse.app/Contents/MacOS/LLMPulse"
+```
+
+Look for `minos 13.0` in the diagnostic output. If your installed macOS is older
+than 13.0, LLMPulse v0.1 is not supported. The login LaunchAgent does not need
+to be re-enabled after refreshing the app. If `open` still fails despite a
+compatible `minos`, run the executable directly to inspect its startup error:
+
+```bash
+"$HOME/.local/opt/LLMPulse.app/Contents/MacOS/LLMPulse"
+```
+
 ## Providers
 
 | Provider | Method | Important constraints |
