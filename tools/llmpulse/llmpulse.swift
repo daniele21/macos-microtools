@@ -9,6 +9,8 @@ import Combine
 final class LLMPulseStore: ObservableObject {
     @Published var snapshots: [LLMProvider: QuotaSnapshot] = [:]
     @Published var errors: [LLMProvider: String] = [:]
+    @Published var claudeLinkState: ClaudeLinkState = ClaudeStatusLineManager.status()
+    @Published var claudeSetupError: String?
     @Published var refreshing: Set<LLMProvider> = []
     @Published private(set) var now = Date()
     @Published var autoRefresh: Bool {
@@ -84,6 +86,23 @@ final class LLMPulseStore: ObservableObject {
         } else if visibleProviders.count > 1 {
             visibleProviders.remove(provider)
         }
+    }
+
+    func inspectClaudeConnection() {
+        claudeLinkState = ClaudeStatusLineManager.status()
+    }
+
+    // Explicitly user-triggered one-click connect. Never silently modifies
+    // ~/.claude/settings.json when viewing a menu item or running auto refresh.
+    func connectClaude() {
+        do {
+            claudeLinkState = try ClaudeStatusLineManager.connect()
+            claudeSetupError = nil
+        } catch {
+            claudeSetupError = error.localizedDescription
+            inspectClaudeConnection()
+        }
+        didUpdate?()
     }
 
     func refreshAll() {
@@ -407,6 +426,9 @@ private struct LLMPulsePopover: View {
 
     private var providerContent: some View {
         VStack(alignment: .leading, spacing: 12) {
+            if provider == .claude {
+                claudeConnectionSection
+            }
             if provider == .antigravity {
                 HStack(spacing: 5) {
                     Image(systemName: "slider.horizontal.3")
@@ -500,6 +522,72 @@ private struct LLMPulsePopover: View {
         }
         .padding(13)
         .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+
+    private var claudeConnectionSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            switch store.claudeLinkState {
+            case .notConfigured, .customStatusLine:
+                HStack(spacing: 7) {
+                    Image(systemName: "link.badge.plus")
+                        .foregroundStyle(Color.accentColor)
+                    Text("Claude Code non è ancora collegato.")
+                        .font(.system(size: 11, weight: .medium))
+                }
+                Text(store.claudeLinkState == .customStatusLine ?
+                     "La status line attuale sarà mantenuta tramite un bridge locale." :
+                     "Configurazione automatica, senza aprire il Terminale.")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                Button {
+                    store.connectClaude()
+                } label: {
+                    Label("Collega Claude Code", systemImage: "link")
+                        .font(.system(size: 11, weight: .semibold))
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .help("Configura la status line mantenendo le altre preferenze Claude")
+            case .linked, .linkedWithBridge:
+                HStack(spacing: 7) {
+                    Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                    Text("Collegamento attivo")
+                        .font(.system(size: 11, weight: .medium))
+                    Spacer()
+                }
+                if store.fiveHour(.claude) == nil {
+                    Text("Le quote arrivano automaticamente dopo una richiesta in Claude Code. LLMPulse non avvia conversazioni AI.")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                }
+                if let old = store.snapshots[.claude],
+                   !old.isFresh(now: store.now) {
+                    let previous = old.windows.first { $0.id == "five_hour" }
+                    if let previous {
+                        Text("Ultima lettura: \(Int(previous.usedPercent.rounded()))% consumato · \(QuotaStyle.age(old.capturedAt)) · non aggiornata")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            case .missingHelper:
+                Text("Ricevitore LLMPulseIngest non disponibile. Reinstalla LLMPulse.")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.orange)
+            case .invalidSettings:
+                Text("Impostazioni Claude non leggibili o non valide. LLMPulse non le modifica.")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.orange)
+            }
+            if let error = store.claudeSetupError {
+                Text(error)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.red)
+            }
+        }
+        .padding(11)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 10))
+        .onAppear { store.inspectClaudeConnection() }
     }
 
     private var settingsContent: some View {
