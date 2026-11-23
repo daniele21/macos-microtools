@@ -259,14 +259,31 @@ uninstall: uninstall-portpulse
 
 LLMPULSE_SOURCES = tools/llmpulse/QuotaCore.swift tools/llmpulse/QuotaRuntime.swift tools/llmpulse/llmpulse.swift
 
+# Match LSMinimumSystemVersion in tools/llmpulse/Info.plist; do not rely on
+# the SDK/compiler default (e.g. a newer local Xcode can emit a macOS 26 binary).
+LLMPULSE_DEPLOYMENT_TARGET = 13.0
+LLMPULSE_SWIFT_TARGET = $(shell uname -m)-apple-macosx$(LLMPULSE_DEPLOYMENT_TARGET)
+
 bin/LLMPulse.app/Contents/MacOS/LLMPulse: $(LLMPULSE_SOURCES) tools/llmpulse/Info.plist | bin
 	mkdir -p bin/LLMPulse.app/Contents/MacOS
-	$(SWIFTC) -parse-as-library $(SWIFTFLAGS) -framework AppKit -framework SwiftUI -framework Combine $(LLMPULSE_SOURCES) -o bin/LLMPulse.app/Contents/MacOS/LLMPulse
-	$(SWIFTC) -parse-as-library $(SWIFTFLAGS) tools/llmpulse/QuotaCore.swift tools/llmpulse/QuotaRuntime.swift tools/llmpulse/ingest.swift -o bin/LLMPulse.app/Contents/MacOS/LLMPulseIngest
+	$(SWIFTC) -parse-as-library $(SWIFTFLAGS) -target $(LLMPULSE_SWIFT_TARGET) -framework AppKit -framework SwiftUI -framework Combine $(LLMPULSE_SOURCES) -o bin/LLMPulse.app/Contents/MacOS/LLMPulse
+	$(SWIFTC) -parse-as-library $(SWIFTFLAGS) -target $(LLMPULSE_SWIFT_TARGET) tools/llmpulse/QuotaCore.swift tools/llmpulse/QuotaRuntime.swift tools/llmpulse/ingest.swift -o bin/LLMPulse.app/Contents/MacOS/LLMPulseIngest
 	cp tools/llmpulse/Info.plist bin/LLMPulse.app/Contents/Info.plist
 	-codesign --force --sign - bin/LLMPulse.app
 
 build-llmpulse: bin/LLMPulse.app/Contents/MacOS/LLMPulse
+	@# The plist alone does not set the binary's deployment target: LaunchServices
+	@# checks the Mach-O LC_BUILD_VERSION minimum and returns -10825 if too new.
+	@for executable in LLMPulse LLMPulseIngest; do \
+		binary="bin/LLMPulse.app/Contents/MacOS/$executable"; \
+		minos="$(xcrun vtool -show-build "$binary" | awk '$1 == "minos" { print $2; exit }')"; \
+		if [ "$minos" != "$(LLMPULSE_DEPLOYMENT_TARGET)" ]; then \
+			echo "ERROR: $executable deployment target '$minos', expected $(LLMPULSE_DEPLOYMENT_TARGET)." >&2; \
+			echo "Run: make -B build-llmpulse" >&2; \
+			exit 1; \
+		fi; \
+	done
+	@echo "✓ LLMPulse Mach-O minimum macOS $(LLMPULSE_DEPLOYMENT_TARGET) (app + Claude helper)"
 
 test-llmpulse: | bin
 	@/bin/bash -n tools/llmpulse/login-item.sh
