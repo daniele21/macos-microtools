@@ -36,8 +36,13 @@ open the Antigravity popup and expand `Gruppi e altre quote`, or choose the
 group in Settings. Weekly-only model families show `—` for their missing
 5-hour quota; their weekly reading remains visible after clicking.
 
-All status item widths stay constant across `9% (9)`, `99% (100)`, `100% (100)` and `— (—)`,
-so adjacent macOS menu extras do not shift when quotas change. The refresh
+The three menu items use a compact **96 pt fixed width** (instead of 112 pt),
+reducing horizontal gaps without shifting neighboring menu extras as values change
+between `9% (9)`, `99% (100)`, `100% (100)` and `— (—)`.
+Each provider has a recognizable macOS-adaptive accent: **Codex teal**, **Claude
+orange**, **Antigravity indigo**, applied to its icon and primary percentage.
+A near-exhausted allowance still changes the percentage/gauge to orange or red;
+the weekly percentage stays muted unless its own allowance is low. The refresh
 timer runs every five minutes; a separate local-file check every 12 seconds
 picks up fresh Claude status-line events while the popup is closed. Existing
 provider sessions, no-session credential policy and cache format are unchanged.
