@@ -172,10 +172,19 @@ private enum QuotaStyle {
         if remaining <= 25 { return Color(red: 0.88, green: 0.59, blue: 0.25) }
         return Color(red: 0.20, green: 0.65, blue: 0.57)
     }
-    static func statusTint(remaining: Double) -> NSColor {
+    // Native adaptive macOS colors: stable identification even when a quota
+    // has no data. Severity still overrides the numeric metric and gauge.
+    static func brandTint(_ provider: LLMProvider) -> NSColor {
+        switch provider {
+        case .codex: return .systemTeal
+        case .claude: return .systemOrange
+        case .antigravity: return .systemIndigo
+        }
+    }
+    static func statusTint(remaining: Double, provider: LLMProvider) -> NSColor {
         if remaining <= 10 { return .systemRed }
         if remaining <= 25 { return .systemOrange }
-        return .labelColor
+        return brandTint(provider)
     }
     static func symbol(_ provider: LLMProvider) -> String {
         switch provider {
@@ -656,7 +665,9 @@ private final class LLMPulseDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         // StatusBar inserts new items to the left: create in reverse order.
         for provider in LLMProvider.allCases.reversed() {
-            let item = NSStatusBar.system.statusItem(withLength: 112)
+            // Fixed 96pt: tighter spacing across the three menu extras, yet
+            // enough for the worst case "100% (100)" in monospaced fonts.
+            let item = NSStatusBar.system.statusItem(withLength: 96)
             item.isVisible = store.isVisible(provider)
             guard let button = item.button else { continue }
             button.tag = LLMProvider.allCases.firstIndex(of: provider) ?? 0
@@ -665,9 +676,10 @@ private final class LLMPulseDelegate: NSObject, NSApplicationDelegate {
             button.image = NSImage(systemSymbolName: QuotaStyle.symbol(provider),
                                    accessibilityDescription: provider.title)
             button.image?.isTemplate = true
+            button.contentTintColor = QuotaStyle.brandTint(provider)
             button.imagePosition = .imageLeft
             button.alignment = .center
-            let gauge = QuotaGauge(frame: NSRect(x: 38, y: 2, width: 66, height: 3))
+            let gauge = QuotaGauge(frame: NSRect(x: 30, y: 2, width: 58, height: 3))
             gauge.autoresizingMask = [.minYMargin]
             button.addSubview(gauge)
             gauges[provider] = gauge
@@ -698,11 +710,11 @@ private final class LLMPulseDelegate: NSObject, NSApplicationDelegate {
             let weeklyText = QuotaPresentation.weeklyCompactLabel(weekly,
                                                                    showRemaining: store.showRemaining)
             let primaryColor = window.map {
-                QuotaStyle.statusTint(remaining: $0.remainingPercent)
+                QuotaStyle.statusTint(remaining: $0.remainingPercent, provider: provider)
             } ?? NSColor.secondaryLabelColor
             let weeklyColor: NSColor
             if let weekly, weekly.remainingPercent <= 25 {
-                weeklyColor = QuotaStyle.statusTint(remaining: weekly.remainingPercent)
+                weeklyColor = weekly.remainingPercent <= 10 ? .systemRed : .systemOrange
             } else {
                 weeklyColor = .secondaryLabelColor
             }
@@ -719,8 +731,9 @@ private final class LLMPulseDelegate: NSObject, NSApplicationDelegate {
             gauge?.isAvailable = window != nil
             gauge?.progress = CGFloat((store.showRemaining ?
                 window?.remainingPercent : window?.usedPercent) ?? 0) / 100
-            gauge?.fillColor = window.map { QuotaStyle.statusTint(remaining: $0.remainingPercent) } ??
-                .secondaryLabelColor
+            gauge?.fillColor = window.map {
+                QuotaStyle.statusTint(remaining: $0.remainingPercent, provider: provider)
+            } ?? .secondaryLabelColor
             button.toolTip = QuotaPresentation.menuTooltip(
                 provider: provider, snapshot: store.snapshots[provider],
                 fiveHour: window, weekly: weekly, showRemaining: store.showRemaining,
