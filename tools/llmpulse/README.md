@@ -97,6 +97,31 @@ LLMPULSE_AGY_PATH=/absolute/path/to/agy
 These are optional. When set, an invalid override is an explicit missing-CLI
 error; the app never silently falls back to another binary.
 
+### Collegamento Claude automatico (consigliato)
+
+Dalla menu bar, fai clic sull'icona Claude Code di LLMPulse e premi
+**Collega Claude Code**. Eseguire comandi nel Terminale non serve.
+
+Il pulsante configura una volta sola `~/.claude/settings.json` e non modifica
+le altre impostazioni. Se Claude ha già una status line personalizzata,
+LLMPulse crea un bridge locale che inoltra lo stesso JSON sia a
+`LLMPulseIngest` sia al precedente comando, conservandone l'output e creando
+una copia di sicurezza `settings.json.llmpulse-backup-*` (permessi 0600).
+Una seconda pressione è idempotente. L'installazione non cambia mai
+`settings.json` in automatico, senza il tuo clic esplicito.
+
+**Questa configurazione non crea richieste AI.** Le quote arrivano quando
+Claude Code invia i dati attraverso la sua status line durante una sessione
+attiva, normalmente dopo la prima risposta del modello. In assenza di una
+sessione attiva, il menu mostra `—` per il dato live; il popover distingue
+collegamento attivo, primo dato ancora non ricevuto e ultima rilevazione
+disponibile ma non aggiornata. Non occorrono script diagnostici ricorrenti.
+
+Per anomalie, il popover mostra automaticamente lo stato del collegamento.
+Se `settings.json` non è un oggetto JSON valido, LLMPulse non lo sovrascrive.
+In un ambiente con impostazioni Claude gestite a livello organizzativo,
+le preferenze locali possono essere ignorate da Claude Code.
+
 ### Claude Code status line setup
 
 The Claude Code status-line callback receives rate limits as JSON on stdin:
@@ -104,7 +129,7 @@ The Claude Code status-line callback receives rate limits as JSON on stdin:
 `rate_limits.seven_day.used_percentage`. Model-specific weekly limits are
 not consistently provided by this callback; LLMPulse will not fabricate them.
 
-**Manual opt-in**, when no custom status line currently exists, add to
+**Configurazione manuale alternativa**, quando non esiste già una status line, aggiungi a
 `~/.claude/settings.json` (merge into the existing JSON, do not replace it):
 ```json
 {

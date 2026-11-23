@@ -257,7 +257,7 @@ uninstall: uninstall-portpulse
 # LLMPulse: native Swift macOS menu bar; native vendor CLI adapters; no SDKs.
 .PHONY: build-llmpulse test-llmpulse install-llmpulse refresh-llmpulse uninstall-llmpulse
 
-LLMPULSE_SOURCES = tools/llmpulse/QuotaCore.swift tools/llmpulse/QuotaPresentation.swift tools/llmpulse/QuotaRuntime.swift tools/llmpulse/llmpulse.swift
+LLMPULSE_SOURCES = tools/llmpulse/QuotaCore.swift tools/llmpulse/QuotaPresentation.swift tools/llmpulse/QuotaRuntime.swift tools/llmpulse/ClaudeStatusLineManager.swift tools/llmpulse/llmpulse.swift
 
 # Match LSMinimumSystemVersion in tools/llmpulse/Info.plist; do not rely on
 # the SDK/compiler default (e.g. a newer local Xcode can emit a macOS 26 binary).
@@ -282,6 +282,8 @@ test-llmpulse: | bin
 	./bin/llmpulse-tests
 	$(SWIFTC) tools/llmpulse/QuotaCore.swift tools/llmpulse/QuotaPresentation.swift tools/llmpulse/tests/presentation/main.swift -o bin/llmpulse-presentation-tests
 	./bin/llmpulse-presentation-tests
+	$(SWIFTC) tools/llmpulse/ClaudeStatusLineManager.swift tools/llmpulse/tests/claude-connection/main.swift -o bin/llmpulse-claude-connection-tests
+	./bin/llmpulse-claude-connection-tests
 	@/bin/bash tools/llmpulse/tests/native-check.sh
 
 install-llmpulse: build-llmpulse
