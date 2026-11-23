@@ -1,4 +1,5 @@
 import Foundation
+import CoreFoundation
 
 // Provider-neutral quota contract. Percentages are USED in upstream responses,
 // but LLMPulse consistently renders REMAINING capacity.
@@ -132,7 +133,7 @@ enum QuotaParser {
         for (id, bucket) in buckets {
             let givenName = (bucket["limitName"] as? String).flatMap { $0.isEmpty ? nil : $0 }
             let title = givenName ?? (id == "codex" ? "Codex" : id)
-            for (kind, suffix) in [("primary", "1"), ("secondary", "2")] {
+            for kind in ["primary", "secondary"] {
                 guard let window = bucket[kind] as? [String: Any],
                       let used = percent(window["usedPercent"]) else { continue }
                 let period = cadence(number(window["windowDurationMins"]))
@@ -142,7 +143,6 @@ enum QuotaParser {
                     usedPercent: used,
                     resetsAt: epoch(window["resetsAt"])
                 ))
-                _ = suffix
             }
         }
         guard !windows.isEmpty else { throw QuotaParseError.missingLimits }
