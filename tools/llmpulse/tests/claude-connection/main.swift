@@ -25,8 +25,8 @@ test(initial == .linked, "one-click integration creates direct statusline")
 let stored = try JSONSerialization.jsonObject(with: Data(contentsOf: settings)) as! [String: Any]
 let direct = (stored["statusLine"] as! [String: Any])["command"] as! String
 test(direct.contains(helper.path), "direct helper configured")
-test(ClaudeStatusLineManager.connect(home: home, helper: helper) == .linked,
-     "repeated connect is idempotent")
+let repeatedDirect = try ClaudeStatusLineManager.connect(home: home, helper: helper)
+test(repeatedDirect == .linked, "repeated connect is idempotent")
 test(ClaudeStatusLineManager.status(home: home, helper: helper) == .linked,
      "linked detected")
 
