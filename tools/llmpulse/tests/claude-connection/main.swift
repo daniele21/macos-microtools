@@ -45,8 +45,8 @@ let original = """
 try Data(original.utf8).write(to: secondSettings)
 test(ClaudeStatusLineManager.status(home: secondHome, helper: secondHelper) == .customStatusLine,
      "existing custom statusline detected")
-test(try ClaudeStatusLineManager.connect(home: secondHome, helper: secondHelper) == .linkedWithBridge,
-     "custom statusline wrapped rather than discarded")
+let firstBridge = try ClaudeStatusLineManager.connect(home: secondHome, helper: secondHelper)
+test(firstBridge == .linkedWithBridge, "custom statusline wrapped rather than discarded")
 let bridgedDoc = try JSONSerialization.jsonObject(with: Data(contentsOf: secondSettings)) as! [String: Any]
 let bridgedStatus = bridgedDoc["statusLine"] as! [String: Any]
 test((bridgedDoc["theme"] as? String) == "dark", "unrelated settings preserved")
@@ -62,13 +62,13 @@ let wrapper = try String(contentsOf: claudeDir.appendingPathComponent(scripts[0]
 test(wrapper.contains(Data(originalCommand.utf8).base64EncodedString()),
      "original command preserved for second invocation")
 test(wrapper.contains("LLMPulseIngest"), "bridge invokes quota sink")
-test(try String(contentsOf: claudeDir.appendingPathComponent(backups[0]), encoding: .utf8) == original,
-     "original JSON backed up")
-test(ClaudeStatusLineManager.connect(home: secondHome, helper: secondHelper) == .linkedWithBridge,
-     "bridge setup idempotent")
-test((try fm.contentsOfDirectory(atPath: claudeDir.path)).filter {
-    $0.hasPrefix("llmpulse-statusline-bridge-")
-}.count == 1, "idempotence does not create extra wrappers")
+let backupData = try String(contentsOf: claudeDir.appendingPathComponent(backups[0]), encoding: .utf8)
+test(backupData == original, "original JSON backed up")
+let secondBridge = try ClaudeStatusLineManager.connect(home: secondHome, helper: secondHelper)
+test(secondBridge == .linkedWithBridge, "bridge setup idempotent")
+let sameFiles = try fm.contentsOfDirectory(atPath: claudeDir.path)
+test(sameFiles.filter { $0.hasPrefix("llmpulse-statusline-bridge-") }.count == 1,
+     "idempotence does not create extra wrappers")
 
 let corruptHome = fm.temporaryDirectory.appendingPathComponent("llmpulse-claude-bad-" + UUID().uuidString)
 defer { try? fm.removeItem(at: corruptHome) }
