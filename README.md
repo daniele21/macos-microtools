@@ -25,6 +25,7 @@ Most modern macOS utilities suffer from feature creep: multi-gigabyte Electron r
 | [**RunnerPulse**](tools/runnerpulse/) | Monitor GitHub Actions self-hosted runners, workflow jobs, current steps, queue and failures in the menu bar. | MVP (v0.1) |
 | [**DisplayPulse**](tools/displaypulse/) | Hardware DDC/CI brightness test and fallback per-screen software dimmer in the menu bar. | MVP (v0.1; Atlantis hardware probe pending) |
 | [**PortPulse**](tools/portpulse/) | Monitor TCP listening ports, process owners and non-loopback bindings; optional safe SIGTERM after confirmation. | MVP (v0.1) |
+| [**LLMPulse**](tools/llmpulse/) | Track native Codex, Claude Code and Antigravity quota windows and reset countdowns from the macOS menu bar. | MVP (v0.1) |
 
 *More tools (AI VRAM monitor and sleep toggles) are planned.*
 
@@ -66,6 +67,14 @@ To launch PortPulse:
 ```bash
 open "$HOME/.local/opt/PortPulse.app"
 ```
+
+To launch LLMPulse:
+```bash
+make install-llmpulse
+open "$HOME/.local/opt/LLMPulse.app"
+```
+
+Claude Code requires an opt-in status line integration; see [LLMPulse setup](tools/llmpulse/README.md).
 
 To launch TerminalClip:
 ```bash

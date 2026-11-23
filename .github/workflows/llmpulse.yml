@@ -1,0 +1,28 @@
+name: LLMPulse native macOS validation
+on:
+  pull_request:
+    paths:
+      - 'tools/llmpulse/**'
+      - 'Makefile'
+      - '.github/workflows/llmpulse.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'tools/llmpulse/**'
+      - 'Makefile'
+      - '.github/workflows/llmpulse.yml'
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parser, cache and native app validation
+        run: make test-llmpulse
+      - name: Validate bundle
+        run: |
+          plutil -lint bin/LLMPulse.app/Contents/Info.plist
+          test -x bin/LLMPulse.app/Contents/MacOS/LLMPulse
+          codesign --verify bin/LLMPulse.app
