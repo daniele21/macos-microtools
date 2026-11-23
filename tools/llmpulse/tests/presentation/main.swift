@@ -24,12 +24,26 @@ assertQuota(QuotaPresentation.weekly(codex, matching: codexFive, at: now)?.id ==
             "Codex weekly is paired with same limitId")
 assertQuota(QuotaPresentation.usedLabel(codexFive, showRemaining: false) == "89%", "used %")
 assertQuota(QuotaPresentation.usedLabel(codexFive, showRemaining: true) == "11%", "remaining %")
+let codexWeekly = QuotaPresentation.weekly(codex, matching: codexFive, at: now)
+assertQuota(QuotaPresentation.weeklyCompactLabel(codexWeekly, showRemaining: false) == " (72)",
+            "weekly displayed in parentheses, no redundant percent sign")
+assertQuota(QuotaPresentation.weeklyCompactLabel(codexWeekly, showRemaining: true) == " (28)",
+            "weekly obeys global remaining preference")
+assertQuota(QuotaPresentation.weeklyCompactLabel(nil, showRemaining: false) == " (—)",
+            "missing weekly shown as unknown, not zero")
+assertQuota(QuotaPresentation.menuTooltip(provider: .codex, snapshot: codex,
+    fiveHour: codexFive, weekly: codexWeekly, showRemaining: false, at: now)
+    .contains("7 giorni: 72% consumato"), "tooltip spells out weekly semantics")
 let claude = snap(.claude, [
     window("five_hour", "5h", 4),
     window("seven_day", "7 giorni", 0)
 ])
 assertQuota(QuotaPresentation.fiveHour(claude, at: now)?.remainingPercent == 96, "Claude session")
 assertQuota(QuotaPresentation.weekly(claude, matching: QuotaPresentation.fiveHour(claude, at: now), at: now)?.remainingPercent == 100, "Claude weekly")
+assertQuota(QuotaPresentation.weeklyCompactLabel(
+    QuotaPresentation.weekly(claude, matching: QuotaPresentation.fiveHour(claude, at: now),
+                             at: now), showRemaining: false) == " (0)",
+    "true zero weekly used remains visible")
 let antigravity = snap(.antigravity, [
     window("gemini-weekly", "Gemini Models · 7 giorni", 1),
     window("gemini-5h", "Gemini Models · Five Hour Limit Remaining", 5),
