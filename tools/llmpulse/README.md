@@ -7,6 +7,35 @@ LLMPulse reads and normalizes independent quota windows and shows **remaining pe
 time to reset, capture age and a warning/critical icon near exhaustion. No provider credentials,
 transcripts, conversation texts or session identifiers are written to disk.
 
+## Progressive-disclosure menu bar (v0.2)
+
+One LLMPulse process creates **three separate fixed-width status items**, with a
+provider symbol, a numeric five-hour utilization percentage and a thin gauge.
+You can read consumption without opening any popover. The default shows **used
+quota** (e.g. `89%` means 89% consumed, with 11% left); Settings can switch all
+three indicators to **remaining quota**. A near-limit quota changes color
+(orange at <=25% remaining, red at <=10%). Unknown/old readings show `—`,
+never a made-up `0%`.
+
+Each icon opens **only that provider's** compact popup. You first see 5-hour
+and weekly quota plus reset information; expand **Altre quote / Gruppi e altre
+quote** to reveal additional buckets. Click the gear in any popup to configure
+used vs remaining, enabled providers and automatic polling. At least one icon
+always stays available so Settings remains reachable.
+
+**Antigravity has distinct group quotas**, not a unified 5-hour allowance.
+By default the menu bar displays the most limiting valid 5-hour bucket and
+its tooltip tells you which group it belongs to. To pin a family instead,
+open the Antigravity popup and expand `Gruppi e altre quote`, or choose the
+group in Settings. Weekly-only model families show `—` for their missing
+5-hour quota; their weekly reading remains visible after clicking.
+
+All status item widths stay constant across `9%`, `99%`, `100%` and `—`,
+so adjacent macOS menu extras do not shift when quotas change. The refresh
+timer runs every five minutes; a separate local-file check every 12 seconds
+picks up fresh Claude status-line events while the popup is closed. Existing
+provider sessions, no-session credential policy and cache format are unchanged.
+
 ## Install
 
 Requires macOS 13+ and Xcode Command Line Tools.
@@ -129,7 +158,9 @@ make uninstall-llmpulse
 
 Tests check Codex multi-bucket and legacy JSON, Claude missing/invalid rate limit
 payloads, Antigravity family buckets, percentage semantics, independent reset
-times and cache provider isolation.
+times and cache provider isolation. Presentation tests additionally cover
+five-hour-only menu indicators, stale/missing data, vendor-specific weekly
+pairing, Antigravity automatic/pinned groups, and used/remaining semantics.
 
 ### Documentation for integrations
 
