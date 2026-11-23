@@ -43,7 +43,7 @@ Each provider keeps its identifiable macOS accent in the small quota gauge:
 **Codex teal**, **Claude orange**, **Antigravity indigo**. The icon and both
 numeric percentages use semantic, appearance-adaptive system label colors for
 legibility over arbitrary translucent menu-bar wallpapers and highlighted states.
-The five-hour value is 11pt semibold; weekly stays 9pt medium, but is no
+The five-hour value is 11pt semibold; weekly uses 10pt medium, but is no
 longer faded to low-contrast secondary gray. The gauge also has a neutral
 contrasting track/outline. Low allowances still use an orange/red gauge.
 
