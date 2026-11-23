@@ -19,6 +19,8 @@ open "$HOME/.local/opt/LLMPulse.app"
 
 Only LLMPulse: `make refresh-llmpulse` rebuilds and relaunches the app. The installation
 does **not** enable a login item or modify Claude Code settings.
+To opt into login startup: `make enable-llmpulse-login`.
+To disable it: `make disable-llmpulse-login`.
 
 ## Providers
 
