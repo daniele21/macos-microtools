@@ -72,7 +72,7 @@ Instead create your own wrapper script:
 ```bash
 #!/bin/zsh
 payload=$(cat)
-printf '%s' "$payload" | "$HOME/.local/opt/LLMPulse.app/Contents/MacOS/LLMPulse" --claude-ingest-only
+printf '%s' "$payload" | "$HOME/.local/opt/LLMPulse.app/Contents/MacOS/LLMPulseIngest" --silent
 printf '%s' "$payload" | "$HOME/.claude/my-existing-statusline.sh"
 ```
 
@@ -115,7 +115,7 @@ times and cache provider isolation.
 
 ## Current limitations (v0.1)
 
-Native macOS and unit-test build still need a Mac machine or macOS GitHub
-Actions runner for verification. There is no automated Claude setup because it
+Native macOS build and parser tests are validated in the macOS GitHub
+Actions workflow. Live provider integration requires your logged-in Mac. There is no automated Claude setup because it
 must not clobber an existing status line. No API-usage billing or synthetic
 overall %; subscription quotas and API token accounting are separate.
