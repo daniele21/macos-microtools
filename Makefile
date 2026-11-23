@@ -268,6 +268,7 @@ bin/LLMPulse.app/Contents/MacOS/LLMPulse: $(LLMPULSE_SOURCES) tools/llmpulse/Inf
 build-llmpulse: bin/LLMPulse.app/Contents/MacOS/LLMPulse
 
 test-llmpulse: | bin
+	@/bin/bash -n tools/llmpulse/login-item.sh
 	$(SWIFTC) tools/llmpulse/QuotaCore.swift tools/llmpulse/tests/main.swift -o bin/llmpulse-tests
 	./bin/llmpulse-tests
 	@if [ "$$(uname -s)" = Darwin ]; then \
@@ -291,3 +292,15 @@ uninstall-llmpulse:
 	-pkill -x LLMPulse 2>/dev/null
 	rm -rf $(HOME)/.local/opt/LLMPulse.app
 	@echo "✓ LLMPulse removed (quota cache and Claude settings untouched)"
+
+
+.PHONY: enable-llmpulse-login disable-llmpulse-login status-llmpulse-login
+
+enable-llmpulse-login: install-llmpulse
+	@/bin/bash tools/llmpulse/login-item.sh enable
+
+disable-llmpulse-login:
+	@/bin/bash tools/llmpulse/login-item.sh disable
+
+status-llmpulse-login:
+	@/bin/bash tools/llmpulse/login-item.sh status
