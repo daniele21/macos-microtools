@@ -100,8 +100,18 @@ enum QuotaPresentation {
         return "\(Int(number.rounded()))%"
     }
 
+    // The weekly number sits inside subtle parentheses next to the larger
+    // five-hour number in the fixed-width status item.
+    // Always render a placeholder when unavailable, never a fake zero.
+    static func weeklyCompactLabel(_ window: QuotaWindow?, showRemaining: Bool) -> String {
+        let numeric = usedLabel(window, showRemaining: showRemaining)
+            .replacingOccurrences(of: "%", with: "")
+        return " (\(numeric))"
+    }
+
     static func menuTooltip(provider: LLMProvider, snapshot: QuotaSnapshot?,
-                            fiveHour: QuotaWindow?, showRemaining: Bool,
+                            fiveHour: QuotaWindow?, weekly: QuotaWindow? = nil,
+                            showRemaining: Bool,
                             error: String? = nil, at now: Date = Date()) -> String {
         var lines = ["\(provider.title) · quota 5 ore"]
         if let fiveHour {
@@ -114,6 +124,12 @@ enum QuotaPresentation {
             lines.append("Dati non aggiornati")
         } else {
             lines.append("Quota 5 ore non disponibile")
+        }
+        if let weekly {
+            lines.append("7 giorni: \(usedLabel(weekly, showRemaining: showRemaining)) \(showRemaining ? "disponibile" : "consumato")")
+            lines.append("Reset settimanale \(weekly.resetDescription(now: now))")
+        } else {
+            lines.append("Quota settimanale non disponibile")
         }
         if let error, !error.isEmpty { lines.append(error) }
         return lines.joined(separator: "\n")

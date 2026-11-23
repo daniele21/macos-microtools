@@ -656,7 +656,7 @@ private final class LLMPulseDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         // StatusBar inserts new items to the left: create in reverse order.
         for provider in LLMProvider.allCases.reversed() {
-            let item = NSStatusBar.system.statusItem(withLength: 79)
+            let item = NSStatusBar.system.statusItem(withLength: 112)
             item.isVisible = store.isVisible(provider)
             guard let button = item.button else { continue }
             button.tag = LLMProvider.allCases.firstIndex(of: provider) ?? 0
@@ -667,7 +667,7 @@ private final class LLMPulseDelegate: NSObject, NSApplicationDelegate {
             button.image?.isTemplate = true
             button.imagePosition = .imageLeft
             button.alignment = .center
-            let gauge = QuotaGauge(frame: NSRect(x: 33, y: 2, width: 37, height: 3))
+            let gauge = QuotaGauge(frame: NSRect(x: 38, y: 2, width: 66, height: 3))
             gauge.autoresizingMask = [.minYMargin]
             button.addSubview(gauge)
             gauges[provider] = gauge
@@ -690,15 +690,31 @@ private final class LLMPulseDelegate: NSObject, NSApplicationDelegate {
             }
             item.isVisible = isVisible
             let window = store.fiveHour(provider)
-            let number = window == nil ? "  —" : String(format: "%3d%%",
-                Int((store.showRemaining ? window!.remainingPercent :
-                    window!.usedPercent).rounded()))
-            let color = window.map { QuotaStyle.statusTint(remaining: $0.remainingPercent) } ??
-                NSColor.secondaryLabelColor
-            button.attributedTitle = NSAttributedString(string: number, attributes: [
+            // Weekly must be tied to the SAME Codex/Antigravity quota family
+            // as the 5h window. QuotaPresentation already enforces that.
+            let weekly = store.weekly(provider)
+            let primaryText = QuotaPresentation.usedLabel(window,
+                                                           showRemaining: store.showRemaining)
+            let weeklyText = QuotaPresentation.weeklyCompactLabel(weekly,
+                                                                   showRemaining: store.showRemaining)
+            let primaryColor = window.map {
+                QuotaStyle.statusTint(remaining: $0.remainingPercent)
+            } ?? NSColor.secondaryLabelColor
+            let weeklyColor: NSColor
+            if let weekly, weekly.remainingPercent <= 25 {
+                weeklyColor = QuotaStyle.statusTint(remaining: weekly.remainingPercent)
+            } else {
+                weeklyColor = .secondaryLabelColor
+            }
+            let label = NSMutableAttributedString(string: primaryText, attributes: [
                 .font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .semibold),
-                .foregroundColor: color
+                .foregroundColor: primaryColor
             ])
+            label.append(NSAttributedString(string: weeklyText, attributes: [
+                .font: NSFont.monospacedDigitSystemFont(ofSize: 9, weight: .medium),
+                .foregroundColor: weeklyColor
+            ]))
+            button.attributedTitle = label
             let gauge = gauges[provider]
             gauge?.isAvailable = window != nil
             gauge?.progress = CGFloat((store.showRemaining ?
@@ -707,7 +723,7 @@ private final class LLMPulseDelegate: NSObject, NSApplicationDelegate {
                 .secondaryLabelColor
             button.toolTip = QuotaPresentation.menuTooltip(
                 provider: provider, snapshot: store.snapshots[provider],
-                fiveHour: window, showRemaining: store.showRemaining,
+                fiveHour: window, weekly: weekly, showRemaining: store.showRemaining,
                 error: store.errors[provider])
         }
     }

@@ -10,10 +10,16 @@ transcripts, conversation texts or session identifiers are written to disk.
 ## Progressive-disclosure menu bar (v0.2)
 
 One LLMPulse process creates **three separate fixed-width status items**, with a
-provider symbol, a numeric five-hour utilization percentage and a thin gauge.
-You can read consumption without opening any popover. The default shows **used
-quota** (e.g. `89%` means 89% consumed, with 11% left); Settings can switch all
-three indicators to **remaining quota**. A near-limit quota changes color
+provider symbol, a numeric five-hour utilization percentage, a smaller
+weekly number in parentheses, and a thin gauge. For example, `12% (28)`
+means **12% used in the past 5 hours** and **28% used in the weekly quota**.
+The parenthesized weekly figure is deliberately smaller, and turns amber/red
+only if the weekly remaining allowance becomes low. A missing/stale weekly
+value is shown as `(—)`, never as zero. The two numbers come from the same
+Codex limit or Antigravity model group; quotas are never summed.
+
+You can read both figures without opening any popover. The default shows **used
+quota**; Settings can switch all three indicators to **remaining quota**. A near-limit quota changes color
 (orange at <=25% remaining, red at <=10%). Unknown/old readings show `—`,
 never a made-up `0%`.
 
@@ -30,7 +36,7 @@ open the Antigravity popup and expand `Gruppi e altre quote`, or choose the
 group in Settings. Weekly-only model families show `—` for their missing
 5-hour quota; their weekly reading remains visible after clicking.
 
-All status item widths stay constant across `9%`, `99%`, `100%` and `—`,
+All status item widths stay constant across `9% (9)`, `99% (100)`, `100% (100)` and `— (—)`,
 so adjacent macOS menu extras do not shift when quotas change. The refresh
 timer runs every five minutes; a separate local-file check every 12 seconds
 picks up fresh Claude status-line events while the popup is closed. Existing
