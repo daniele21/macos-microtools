@@ -38,7 +38,7 @@ bin/TerminalClip.app/Contents/MacOS/TerminalClip: tools/terminalclip/terminalcli
 	cp tools/terminalclip/Info.plist bin/TerminalClip.app/Contents/Info.plist
 	-codesign --force --sign - bin/TerminalClip.app
 
-build: bin/menumeter bin/TerminalClip.app/Contents/MacOS/TerminalClip bin/RunnerPulse.app/Contents/MacOS/RunnerPulse bin/DisplayPulse.app/Contents/MacOS/DisplayPulse
+build: bin/menumeter bin/TerminalClip.app/Contents/MacOS/TerminalClip bin/RunnerPulse.app/Contents/MacOS/RunnerPulse bin/DisplayPulse.app/Contents/MacOS/DisplayPulse bin/LLMPulse.app/Contents/MacOS/LLMPulse
 
 install-terminalclip: bin/TerminalClip.app/Contents/MacOS/TerminalClip
 	mkdir -p $(HOME)/.local/opt
@@ -70,6 +70,7 @@ install: build
 	$(MAKE) install-terminalclip
 	$(MAKE) install-runnerpulse
 	$(MAKE) install-displaypulse
+	$(MAKE) install-llmpulse
 
 uninstall-terminalclip:
 	-pkill -x TerminalClip 2>/dev/null
@@ -78,7 +79,7 @@ uninstall-terminalclip:
 	rm -rf $(HOME)/.local/opt/TerminalClip.app
 	@echo "✓ TerminalClip removed (Zsh configuration left untouched)"
 
-uninstall: uninstall-terminalclip uninstall-runnerpulse uninstall-displaypulse
+uninstall: uninstall-terminalclip uninstall-runnerpulse uninstall-displaypulse uninstall-llmpulse
 	pkill -x menumeter 2>/dev/null || true
 	rm -f $(PREFIX)/menumeter
 	rm -f $(PREFIX)/menumeter.swift
@@ -251,3 +252,42 @@ uninstall-portpulse:
 build: bin/PortPulse.app/Contents/MacOS/PortPulse
 install: install-portpulse
 uninstall: uninstall-portpulse
+
+
+# LLMPulse: native Swift macOS menu bar; native vendor CLI adapters; no SDKs.
+.PHONY: build-llmpulse test-llmpulse install-llmpulse refresh-llmpulse uninstall-llmpulse
+
+LLMPULSE_SOURCES = tools/llmpulse/QuotaCore.swift tools/llmpulse/QuotaRuntime.swift tools/llmpulse/llmpulse.swift
+
+bin/LLMPulse.app/Contents/MacOS/LLMPulse: $(LLMPULSE_SOURCES) tools/llmpulse/Info.plist | bin
+	mkdir -p bin/LLMPulse.app/Contents/MacOS
+	$(SWIFTC) -parse-as-library $(SWIFTFLAGS) -framework AppKit -framework SwiftUI -framework Combine $(LLMPULSE_SOURCES) -o bin/LLMPulse.app/Contents/MacOS/LLMPulse
+	cp tools/llmpulse/Info.plist bin/LLMPulse.app/Contents/Info.plist
+	-codesign --force --sign - bin/LLMPulse.app
+
+build-llmpulse: bin/LLMPulse.app/Contents/MacOS/LLMPulse
+
+test-llmpulse: | bin
+	$(SWIFTC) tools/llmpulse/QuotaCore.swift tools/llmpulse/tests/main.swift -o bin/llmpulse-tests
+	./bin/llmpulse-tests
+	@if [ "$$(uname -s)" = Darwin ]; then \
+		$(MAKE) -B build-llmpulse; \
+		plutil -lint bin/LLMPulse.app/Contents/Info.plist; \
+	fi
+
+install-llmpulse: build-llmpulse
+	mkdir -p $(HOME)/.local/opt
+	rm -rf $(HOME)/.local/opt/LLMPulse.app
+	ditto bin/LLMPulse.app $(HOME)/.local/opt/LLMPulse.app
+	@echo "✓ LLMPulse installed to $(HOME)/.local/opt/LLMPulse.app"
+
+refresh-llmpulse:
+	$(MAKE) -B build-llmpulse
+	@pkill -x LLMPulse 2>/dev/null || true
+	$(MAKE) install-llmpulse
+	@open -n "$(HOME)/.local/opt/LLMPulse.app"
+
+uninstall-llmpulse:
+	-pkill -x LLMPulse 2>/dev/null
+	rm -rf $(HOME)/.local/opt/LLMPulse.app
+	@echo "✓ LLMPulse removed (quota cache and Claude settings untouched)"
