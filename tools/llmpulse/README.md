@@ -27,7 +27,7 @@ To disable it: `make disable-llmpulse-login`.
 | Provider | Method | Important constraints |
 | --- | --- | --- |
 | Codex | `codex app-server`, JSON-RPC initialize → initialized → `account/rateLimits/read` | Read-only request; uses existing Codex CLI sign-in; no Codex thread is started |
-| Claude Code | `statusLine` callback JSON → `LLMPulse --claude-ingest` | Callback runs when Claude has events; fields only present after first API response; current statusline config is NOT edited |
+| Claude Code | `statusLine` callback JSON → `LLMPulseIngest` | Callback runs when Claude has events; fields only present after first API response; current statusline config is NOT edited |
 | Antigravity | `agy -p /usage --output-format json` | Reads quota buckets per model family, not one synthetic percentage; availability depends on installed CLI/sign-in; CLI may have its own local startup behavior |
 
 The application refreshes every 5 minutes by default and allows manual refresh.
@@ -57,11 +57,12 @@ not consistently provided by this callback; LLMPulse will not fabricate them.
 {
   "statusLine": {
     "type": "command",
-    "command": "$HOME/.local/opt/LLMPulse.app/Contents/MacOS/LLMPulse --claude-ingest"
+    "command": "$HOME/.local/opt/LLMPulse.app/Contents/MacOS/LLMPulseIngest"
   }
 }
 ```
 
+The Foundation-only `LLMPulseIngest` helper avoids launching the GUI frameworks on each Claude callback.
 Once Claude processes a request, the status line will display a small readable
 quota string and LLMPulse will receive a private snapshot.
 
