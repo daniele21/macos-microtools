@@ -39,10 +39,20 @@ group in Settings. Weekly-only model families show `—` for their missing
 The three menu items use a compact **96 pt fixed width** (instead of 112 pt),
 reducing horizontal gaps without shifting neighboring menu extras as values change
 between `9% (9)`, `99% (100)`, `100% (100)` and `— (—)`.
-Each provider has a recognizable macOS-adaptive accent: **Codex teal**, **Claude
-orange**, **Antigravity indigo**, applied to its icon and primary percentage.
-A near-exhausted allowance still changes the percentage/gauge to orange or red;
-the weekly percentage stays muted unless its own allowance is low. The refresh
+Each provider keeps its identifiable macOS accent in the small quota gauge:
+**Codex teal**, **Claude orange**, **Antigravity indigo**. The icon and both
+numeric percentages use semantic, appearance-adaptive system label colors for
+legibility over arbitrary translucent menu-bar wallpapers and highlighted states.
+The five-hour value is 11pt semibold; weekly stays 9pt medium, but is no
+longer faded to low-contrast secondary gray. The gauge also has a neutral
+contrasting track/outline. Low allowances still use an orange/red gauge.
+
+Provider identification never depends on color alone: each item has its own
+symbol and a tooltip naming the provider, the five-hour/weekly quotas, and reset
+times. The final visual contrast depends on macOS window/menu-bar material and
+the desktop wallpaper and should be checked in both light and dark appearances.
+For additional contrast on macOS, use System Settings → Accessibility → Display →
+Increase Contrast / Reduce Transparency. The refresh
 timer runs every five minutes; a separate local-file check every 12 seconds
 picks up fresh Claude status-line events while the popup is closed. Existing
 provider sessions, no-session credential policy and cache format are unchanged.
