@@ -25,7 +25,7 @@ let claude = try QuotaParser.claude(decoded(#"""
 """#))
 check(claude.count == 2, "Claude two windows")
 check(claude[0].remainingPercent == 79.5, "Claude remaining calculation")
-check(claude[1].status == "critical" && claude[1].remainingPercent == 12, "Claude warning classification")
+check(claude[1].status == "warning" && claude[1].remainingPercent == 12, "Claude warning classification")
 check((try? QuotaParser.claude(decoded(#"{"rate_limits":{}}"#))) == nil, "missing Claude limits not zero")
 check((try? QuotaParser.claude(decoded(#"{"rate_limits":{"five_hour":{"used_percentage":true}}}"#))) == nil, "reject boolean as percent")
 
