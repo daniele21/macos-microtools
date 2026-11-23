@@ -262,6 +262,7 @@ LLMPULSE_SOURCES = tools/llmpulse/QuotaCore.swift tools/llmpulse/QuotaRuntime.sw
 bin/LLMPulse.app/Contents/MacOS/LLMPulse: $(LLMPULSE_SOURCES) tools/llmpulse/Info.plist | bin
 	mkdir -p bin/LLMPulse.app/Contents/MacOS
 	$(SWIFTC) -parse-as-library $(SWIFTFLAGS) -framework AppKit -framework SwiftUI -framework Combine $(LLMPULSE_SOURCES) -o bin/LLMPulse.app/Contents/MacOS/LLMPulse
+	$(SWIFTC) -parse-as-library $(SWIFTFLAGS) tools/llmpulse/QuotaCore.swift tools/llmpulse/QuotaRuntime.swift tools/llmpulse/ingest.swift -o bin/LLMPulse.app/Contents/MacOS/LLMPulseIngest
 	cp tools/llmpulse/Info.plist bin/LLMPulse.app/Contents/Info.plist
 	-codesign --force --sign - bin/LLMPulse.app
 
