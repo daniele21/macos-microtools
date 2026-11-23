@@ -10,6 +10,7 @@ final class LLMPulseStore: ObservableObject {
     @Published var snapshots: [LLMProvider: QuotaSnapshot] = [:]
     @Published var errors: [LLMProvider: String] = [:]
     @Published var refreshing: Set<LLMProvider> = []
+    @Published private(set) var now = Date()
     @Published var autoRefresh: Bool {
         didSet { UserDefaults.standard.set(autoRefresh, forKey: "llmpulse.autoRefresh") }
     }
@@ -66,7 +67,12 @@ final class LLMPulseStore: ObservableObject {
         // Claude is updated externally by the lightweight statusLine helper.
         // Poll ONLY that private local file, never run a Claude CLI probe.
         claudeTimer = Timer.scheduledTimer(withTimeInterval: 12, repeats: true) { [weak self] _ in
-            self?.observeClaudeFile()
+            guard let self else { return }
+            self.observeClaudeFile()
+            // Even without a new snapshot, a once-fresh quota eventually
+            // becomes stale or passes its reset boundary.
+            self.now = Date()
+            self.didUpdate?()
         }
     }
 
@@ -124,14 +130,16 @@ final class LLMPulseStore: ObservableObject {
         didUpdate?()
     }
 
-    func fiveHour(_ provider: LLMProvider, now: Date = Date()) -> QuotaWindow? {
-        QuotaPresentation.fiveHour(snapshots[provider], group: antigravityGroup, at: now)
+    func fiveHour(_ provider: LLMProvider, now: Date? = nil) -> QuotaWindow? {
+        QuotaPresentation.fiveHour(snapshots[provider], group: antigravityGroup,
+                                   at: now ?? self.now)
     }
 
-    func weekly(_ provider: LLMProvider, now: Date = Date()) -> QuotaWindow? {
-        let fiveHour = self.fiveHour(provider, now: now)
+    func weekly(_ provider: LLMProvider, now: Date? = nil) -> QuotaWindow? {
+        let effectiveTime = now ?? self.now
+        let fiveHour = self.fiveHour(provider, now: effectiveTime)
         return QuotaPresentation.weekly(snapshots[provider], matching: fiveHour,
-                                        group: antigravityGroup, at: now)
+                                        group: antigravityGroup, at: effectiveTime)
     }
 
     var antigravityGroups: [String] {
@@ -361,9 +369,9 @@ private struct LLMPulsePopover: View {
                 if !showingSettings {
                     if let snapshot {
                         HStack(spacing: 5) {
-                            Image(systemName: snapshot.isFresh() ? "checkmark.circle.fill" : "clock")
-                                .foregroundStyle(snapshot.isFresh() ? Color.green : Color.orange)
-                            Text(snapshot.isFresh() ? "Aggiornato \(QuotaStyle.age(snapshot.capturedAt))" :
+                            Image(systemName: snapshot.isFresh(now: store.now) ? "checkmark.circle.fill" : "clock")
+                                .foregroundStyle(snapshot.isFresh(now: store.now) ? Color.green : Color.orange)
+                            Text(snapshot.isFresh(now: store.now) ? "Aggiornato \(QuotaStyle.age(snapshot.capturedAt))" :
                                 "Dati precedenti · \(QuotaStyle.age(snapshot.capturedAt))")
                         }
                     } else {
@@ -393,7 +401,7 @@ private struct LLMPulsePopover: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 11)
         }
-        .frame(width: 364, height: 396)
+        .frame(width: 364, height: 420)
         .background(Color(NSColor.windowBackgroundColor))
     }
 
@@ -578,7 +586,7 @@ private final class LLMPulseDelegate: NSObject, NSApplicationDelegate {
             statusItems[provider] = item
         }
         popover.behavior = .transient
-        popover.contentSize = NSSize(width: 364, height: 396)
+        popover.contentSize = NSSize(width: 364, height: 420)
         store.didUpdate = { [weak self] in self?.renderStatusItems() }
         renderStatusItems()
         store.start()
@@ -594,7 +602,6 @@ private final class LLMPulseDelegate: NSObject, NSApplicationDelegate {
             }
             item.isVisible = isVisible
             let window = store.fiveHour(provider)
-            let label = QuotaPresentation.usedLabel(window, showRemaining: store.showRemaining)
             let number = window == nil ? "  —" : String(format: "%3d%%",
                 Int((store.showRemaining ? window!.remainingPercent :
                     window!.usedPercent).rounded()))
@@ -614,7 +621,6 @@ private final class LLMPulseDelegate: NSObject, NSApplicationDelegate {
                 provider: provider, snapshot: store.snapshots[provider],
                 fiveHour: window, showRemaining: store.showRemaining,
                 error: store.errors[provider])
-            _ = label
         }
     }
 
