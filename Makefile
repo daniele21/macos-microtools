@@ -269,30 +269,18 @@ bin/LLMPulse.app/Contents/MacOS/LLMPulse: $(LLMPULSE_SOURCES) tools/llmpulse/Inf
 	$(SWIFTC) -parse-as-library $(SWIFTFLAGS) -target $(LLMPULSE_SWIFT_TARGET) -framework AppKit -framework SwiftUI -framework Combine $(LLMPULSE_SOURCES) -o bin/LLMPulse.app/Contents/MacOS/LLMPulse
 	$(SWIFTC) -parse-as-library $(SWIFTFLAGS) -target $(LLMPULSE_SWIFT_TARGET) tools/llmpulse/QuotaCore.swift tools/llmpulse/QuotaRuntime.swift tools/llmpulse/ingest.swift -o bin/LLMPulse.app/Contents/MacOS/LLMPulseIngest
 	cp tools/llmpulse/Info.plist bin/LLMPulse.app/Contents/Info.plist
-	-codesign --force --sign - bin/LLMPulse.app
+	codesign --force --sign - bin/LLMPulse.app
 
 build-llmpulse: bin/LLMPulse.app/Contents/MacOS/LLMPulse
-	@# The plist alone does not set the binary's deployment target: LaunchServices
-	@# checks the Mach-O LC_BUILD_VERSION minimum and returns -10825 if too new.
-	@for executable in LLMPulse LLMPulseIngest; do \
-		binary="bin/LLMPulse.app/Contents/MacOS/$executable"; \
-		minos="$(xcrun vtool -show-build "$binary" | awk '$1 == "minos" { print $2; exit }')"; \
-		if [ "$minos" != "$(LLMPULSE_DEPLOYMENT_TARGET)" ]; then \
-			echo "ERROR: $executable deployment target '$minos', expected $(LLMPULSE_DEPLOYMENT_TARGET)." >&2; \
-			echo "Run: make -B build-llmpulse" >&2; \
-			exit 1; \
-		fi; \
-	done
-	@echo "✓ LLMPulse Mach-O minimum macOS $(LLMPULSE_DEPLOYMENT_TARGET) (app + Claude helper)"
+	@/bin/bash tools/llmpulse/check-compatibility.sh bin/LLMPulse.app
 
 test-llmpulse: | bin
 	@/bin/bash -n tools/llmpulse/login-item.sh
+	@/bin/bash -n tools/llmpulse/check-compatibility.sh
+	@/bin/bash -n tools/llmpulse/tests/native-check.sh
 	$(SWIFTC) tools/llmpulse/QuotaCore.swift tools/llmpulse/tests/main.swift -o bin/llmpulse-tests
 	./bin/llmpulse-tests
-	@if [ "$$(uname -s)" = Darwin ]; then \
-		$(MAKE) -B build-llmpulse; \
-		plutil -lint bin/LLMPulse.app/Contents/Info.plist; \
-	fi
+	@/bin/bash tools/llmpulse/tests/native-check.sh
 
 install-llmpulse: build-llmpulse
 	mkdir -p $(HOME)/.local/opt
