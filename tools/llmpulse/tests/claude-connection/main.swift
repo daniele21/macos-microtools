@@ -39,9 +39,13 @@ try fm.createDirectory(at: secondSettings.deletingLastPathComponent(), withInter
 test(fm.createFile(atPath: secondHelper.path, contents: Data(), attributes: [.posixPermissions: 0o700]), "second helper")
 try fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: secondHelper.path)
 let originalCommand = "jq -r '.model.display_name // \"Claude\"'"
-let original = """
-{"permissions":{"allow":["Read"]},"statusLine":{"type":"command","command":"jq -r '.model.display_name // \\"Claude\\"'","padding":2},"theme":"dark"}
-"""
+let originalObject: [String: Any] = [
+    "permissions": ["allow": ["Read"]],
+    "statusLine": ["type": "command", "command": originalCommand, "padding": 2],
+    "theme": "dark"
+]
+let original = String(decoding: try JSONSerialization.data(withJSONObject: originalObject,
+    options: [.prettyPrinted, .sortedKeys]), as: UTF8.self)
 try Data(original.utf8).write(to: secondSettings)
 test(ClaudeStatusLineManager.status(home: secondHome, helper: secondHelper) == .customStatusLine,
      "existing custom statusline detected")
@@ -83,6 +87,6 @@ test(ClaudeStatusLineManager.status(home: corruptHome, helper: corruptHelper) ==
      "malformed settings detected")
 test((try? ClaudeStatusLineManager.connect(home: corruptHome, helper: corruptHelper)) == nil,
      "invalid config refused")
-test(try String(contentsOf: corruptSettings, encoding: .utf8) == "{ invalid JSON }",
-     "malformed config not overwritten")
+let corruptData = try String(contentsOf: corruptSettings, encoding: .utf8)
+test(corruptData == "{ invalid JSON }", "malformed config not overwritten")
 print("LLMPulse Claude connection tests passed")
