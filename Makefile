@@ -259,23 +259,28 @@ uninstall: uninstall-portpulse
 
 LLMPULSE_SOURCES = tools/llmpulse/QuotaCore.swift tools/llmpulse/QuotaRuntime.swift tools/llmpulse/llmpulse.swift
 
+# Match LSMinimumSystemVersion in tools/llmpulse/Info.plist; do not rely on
+# the SDK/compiler default (e.g. a newer local Xcode can emit a macOS 26 binary).
+LLMPULSE_DEPLOYMENT_TARGET = 13.0
+LLMPULSE_SWIFT_TARGET = $(shell uname -m)-apple-macosx$(LLMPULSE_DEPLOYMENT_TARGET)
+
 bin/LLMPulse.app/Contents/MacOS/LLMPulse: $(LLMPULSE_SOURCES) tools/llmpulse/Info.plist | bin
 	mkdir -p bin/LLMPulse.app/Contents/MacOS
-	$(SWIFTC) -parse-as-library $(SWIFTFLAGS) -framework AppKit -framework SwiftUI -framework Combine $(LLMPULSE_SOURCES) -o bin/LLMPulse.app/Contents/MacOS/LLMPulse
-	$(SWIFTC) -parse-as-library $(SWIFTFLAGS) tools/llmpulse/QuotaCore.swift tools/llmpulse/QuotaRuntime.swift tools/llmpulse/ingest.swift -o bin/LLMPulse.app/Contents/MacOS/LLMPulseIngest
+	$(SWIFTC) -parse-as-library $(SWIFTFLAGS) -target $(LLMPULSE_SWIFT_TARGET) -framework AppKit -framework SwiftUI -framework Combine $(LLMPULSE_SOURCES) -o bin/LLMPulse.app/Contents/MacOS/LLMPulse
+	$(SWIFTC) -parse-as-library $(SWIFTFLAGS) -target $(LLMPULSE_SWIFT_TARGET) tools/llmpulse/QuotaCore.swift tools/llmpulse/QuotaRuntime.swift tools/llmpulse/ingest.swift -o bin/LLMPulse.app/Contents/MacOS/LLMPulseIngest
 	cp tools/llmpulse/Info.plist bin/LLMPulse.app/Contents/Info.plist
-	-codesign --force --sign - bin/LLMPulse.app
+	codesign --force --sign - bin/LLMPulse.app
 
 build-llmpulse: bin/LLMPulse.app/Contents/MacOS/LLMPulse
+	@/bin/bash tools/llmpulse/check-compatibility.sh bin/LLMPulse.app
 
 test-llmpulse: | bin
 	@/bin/bash -n tools/llmpulse/login-item.sh
+	@/bin/bash -n tools/llmpulse/check-compatibility.sh
+	@/bin/bash -n tools/llmpulse/tests/native-check.sh
 	$(SWIFTC) tools/llmpulse/QuotaCore.swift tools/llmpulse/tests/main.swift -o bin/llmpulse-tests
 	./bin/llmpulse-tests
-	@if [ "$$(uname -s)" = Darwin ]; then \
-		$(MAKE) -B build-llmpulse; \
-		plutil -lint bin/LLMPulse.app/Contents/Info.plist; \
-	fi
+	@/bin/bash tools/llmpulse/tests/native-check.sh
 
 install-llmpulse: build-llmpulse
 	mkdir -p $(HOME)/.local/opt

@@ -26,3 +26,5 @@ jobs:
           plutil -lint bin/LLMPulse.app/Contents/Info.plist
           test -x bin/LLMPulse.app/Contents/MacOS/LLMPulse
           codesign --verify bin/LLMPulse.app
+          xcrun vtool -show-build bin/LLMPulse.app/Contents/MacOS/LLMPulse
+          xcrun vtool -show-build bin/LLMPulse.app/Contents/MacOS/LLMPulseIngest
