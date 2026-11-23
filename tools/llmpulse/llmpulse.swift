@@ -217,14 +217,20 @@ private final class QuotaGauge: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         let rect = bounds.insetBy(dx: 0, dy: 0.5)
-        NSColor.labelColor.withAlphaComponent(0.13).setFill()
-        NSBezierPath(roundedRect: rect, xRadius: 1, yRadius: 1).fill()
+        let track = NSBezierPath(roundedRect: rect, xRadius: 1, yRadius: 1)
+        NSColor.labelColor.withAlphaComponent(0.28).setFill()
+        track.fill()
         guard isAvailable else { return }
         let fill = NSRect(x: rect.minX, y: rect.minY,
                           width: rect.width * max(0, min(1, progress)),
                           height: rect.height)
         fillColor.setFill()
         NSBezierPath(roundedRect: fill, xRadius: 1, yRadius: 1).fill()
+        // Outline keeps the accent readable even when its hue happens to
+        // approach the luminosity of the translucent menu bar.
+        NSColor.labelColor.withAlphaComponent(0.50).setStroke()
+        track.lineWidth = 0.55
+        track.stroke()
     }
 }
 
@@ -675,8 +681,11 @@ private final class LLMPulseDelegate: NSObject, NSApplicationDelegate {
             button.action = #selector(toggleProvider(_:))
             button.image = NSImage(systemSymbolName: QuotaStyle.symbol(provider),
                                    accessibilityDescription: provider.title)
+            // macOS should resolve the template symbol against the actual
+            // menu-bar material/highlight, rather than forcing a brand hue
+            // that becomes low-contrast over tinted desktop wallpapers.
             button.image?.isTemplate = true
-            button.contentTintColor = QuotaStyle.brandTint(provider)
+            button.contentTintColor = nil
             button.imagePosition = .imageLeft
             button.alignment = .center
             let gauge = QuotaGauge(frame: NSRect(x: 30, y: 2, width: 58, height: 3))
@@ -709,22 +718,18 @@ private final class LLMPulseDelegate: NSObject, NSApplicationDelegate {
                                                            showRemaining: store.showRemaining)
             let weeklyText = QuotaPresentation.weeklyCompactLabel(weekly,
                                                                    showRemaining: store.showRemaining)
-            let primaryColor = window.map {
-                QuotaStyle.statusTint(remaining: $0.remainingPercent, provider: provider)
-            } ?? NSColor.secondaryLabelColor
-            let weeklyColor: NSColor
-            if let weekly, weekly.remainingPercent <= 25 {
-                weeklyColor = weekly.remainingPercent <= 10 ? .systemRed : .systemOrange
-            } else {
-                weeklyColor = .secondaryLabelColor
-            }
+            // Never use provider accents or tertiary/secondary label colors
+            // for small menu-bar text. The desktop wallpaper and menu-bar
+            // material are unpredictable, so readable foreground color must
+            // be semantic. Size/weight communicate the weekly hierarchy.
+            let foreground = NSColor.labelColor
             let label = NSMutableAttributedString(string: primaryText, attributes: [
                 .font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .semibold),
-                .foregroundColor: primaryColor
+                .foregroundColor: foreground
             ])
             label.append(NSAttributedString(string: weeklyText, attributes: [
-                .font: NSFont.monospacedDigitSystemFont(ofSize: 9, weight: .medium),
-                .foregroundColor: weeklyColor
+                .font: NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .medium),
+                .foregroundColor: foreground
             ]))
             button.attributedTitle = label
             let gauge = gauges[provider]
