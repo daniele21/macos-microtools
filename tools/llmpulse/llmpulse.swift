@@ -728,7 +728,7 @@ private final class LLMPulseDelegate: NSObject, NSApplicationDelegate {
                 .foregroundColor: foreground
             ])
             label.append(NSAttributedString(string: weeklyText, attributes: [
-                .font: NSFont.monospacedDigitSystemFont(ofSize: 9, weight: .medium),
+                .font: NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .medium),
                 .foregroundColor: foreground
             ]))
             button.attributedTitle = label
