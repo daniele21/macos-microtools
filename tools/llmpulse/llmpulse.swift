@@ -339,11 +339,21 @@ private struct GroupRow: View {
     }
 }
 
+// Explicit per-popover navigation state. Avoid the SwiftUI @State macro:
+// newer standalone Command Line Tools SDKs can expose State as a macro while
+// lacking the SwiftUIMacros compiler plugin. Combine's Published is a property
+// wrapper, and ObservedObject is already used for the shared quota store.
+// A new model is created every time a provider popover opens, preserving the
+// former per-view lifetime without relying on SDK-specific macro expansion.
+private final class LLMPulsePopoverNavigation: ObservableObject {
+    @Published var showingSettings = false
+    @Published var expanded = false
+}
+
 private struct LLMPulsePopover: View {
     @ObservedObject var store: LLMPulseStore
     let provider: LLMProvider
-    @State private var showingSettings = false
-    @State private var expanded = false
+    @ObservedObject var navigation: LLMPulsePopoverNavigation
 
     private var snapshot: QuotaSnapshot? { store.snapshots[provider] }
     private var session: QuotaWindow? { store.fiveHour(provider) }
@@ -352,9 +362,9 @@ private struct LLMPulsePopover: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
-                if showingSettings {
+                if navigation.showingSettings {
                     Button {
-                        withAnimation(.easeInOut(duration: 0.18)) { showingSettings = false }
+                        withAnimation(.easeInOut(duration: 0.18)) { navigation.showingSettings = false }
                     } label: {
                         Image(systemName: "chevron.left")
                     }
@@ -367,14 +377,14 @@ private struct LLMPulsePopover: View {
                                     in: RoundedRectangle(cornerRadius: 9))
                 }
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(showingSettings ? "Impostazioni" : provider.title)
+                    Text(navigation.showingSettings ? "Impostazioni" : provider.title)
                         .font(.system(size: 15, weight: .semibold))
-                    Text(showingSettings ? "Preferenze LLMPulse" : provider.source)
+                    Text(navigation.showingSettings ? "Preferenze LLMPulse" : provider.source)
                         .font(.system(size: 10))
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                if !showingSettings {
+                if !navigation.showingSettings {
                     if store.refreshing.contains(provider) {
                         ProgressView().controlSize(.small)
                     } else {
@@ -391,7 +401,7 @@ private struct LLMPulsePopover: View {
             Divider()
 
             ScrollView {
-                if showingSettings {
+                if navigation.showingSettings {
                     settingsContent
                 } else {
                     providerContent
@@ -400,7 +410,7 @@ private struct LLMPulsePopover: View {
             Divider()
 
             HStack {
-                if !showingSettings {
+                if !navigation.showingSettings {
                     if let snapshot {
                         HStack(spacing: 5) {
                             Image(systemName: snapshot.isFresh(now: store.now) ? "checkmark.circle.fill" : "clock")
@@ -417,13 +427,13 @@ private struct LLMPulsePopover: View {
                 Spacer()
                 Button {
                     withAnimation(.easeInOut(duration: 0.18)) {
-                        showingSettings.toggle()
+                        navigation.showingSettings.toggle()
                     }
                 } label: {
-                    Image(systemName: showingSettings ? "checkmark" : "gearshape")
+                    Image(systemName: navigation.showingSettings ? "checkmark" : "gearshape")
                 }
                 .buttonStyle(.borderless)
-                .help(showingSettings ? "Chiudi impostazioni" : "Impostazioni")
+                .help(navigation.showingSettings ? "Chiudi impostazioni" : "Impostazioni")
                 Button { NSApplication.shared.terminate(nil) } label: {
                     Image(systemName: "power")
                 }
@@ -483,18 +493,18 @@ private struct LLMPulsePopover: View {
                 .foregroundStyle(.orange)
             }
             Button {
-                withAnimation(.easeInOut(duration: 0.18)) { expanded.toggle() }
+                withAnimation(.easeInOut(duration: 0.18)) { navigation.expanded.toggle() }
             } label: {
                 HStack {
                     Text(provider == .antigravity ? "Gruppi e altre quote" : "Altre quote")
                     Spacer()
-                    Image(systemName: expanded ? "chevron.up" : "chevron.down")
+                    Image(systemName: navigation.expanded ? "chevron.up" : "chevron.down")
                 }
                 .font(.system(size: 11, weight: .medium))
             }
             .buttonStyle(.plain)
             .padding(.top, 3)
-            if expanded {
+            if navigation.expanded {
                 if provider == .antigravity {
                     VStack(alignment: .leading, spacing: 6) {
                         Button {
@@ -757,7 +767,8 @@ private final class LLMPulseDelegate: NSObject, NSApplicationDelegate {
             if same { return }
         }
         popover.contentViewController = NSHostingController(
-            rootView: LLMPulsePopover(store: store, provider: provider)
+            rootView: LLMPulsePopover(store: store, provider: provider,
+                                       navigation: LLMPulsePopoverNavigation())
         )
         popover.show(relativeTo: sender.bounds, of: sender, preferredEdge: .minY)
         openedProvider = provider
