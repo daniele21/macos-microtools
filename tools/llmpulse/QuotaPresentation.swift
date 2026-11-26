@@ -2,6 +2,25 @@ import Foundation
 
 // Pure presentation policy shared by macOS UI and Linux/macOS unit tests.
 // A menu-bar number represents a real 5-hour quota, never a weekly fallback.
+// Persisted user preference, independent from the displayed quota semantics.
+// Width is fixed per density, never driven by changing percentage strings.
+enum QuotaMenuDensity: String, CaseIterable {
+    case compact, minimal
+
+    var width: Double {
+        switch self {
+        case .compact: return 72
+        case .minimal: return 48
+        }
+    }
+}
+
+struct QuotaMenuLabels: Equatable {
+    let primary: String
+    let secondary: String?
+    var text: String { primary + (secondary ?? "") }
+}
+
 enum QuotaPresentation {
     static let automaticGroup = "automatic"
 
@@ -100,13 +119,17 @@ enum QuotaPresentation {
         return "\(Int(number.rounded()))%"
     }
 
-    // The weekly number sits inside subtle parentheses next to the larger
-    // five-hour number in the fixed-width status item.
-    // Always render a placeholder when unavailable, never a fake zero.
-    static func weeklyCompactLabel(_ window: QuotaWindow?, showRemaining: Bool) -> String {
-        let numeric = usedLabel(window, showRemaining: showRemaining)
-            .replacingOccurrences(of: "%", with: "")
-        return " (\(numeric))"
+    // Both values are percentages; omit repeated punctuation in the menubar.
+    // A missing quota is always an em dash, not an invented zero.
+    static func menuLabels(fiveHour: QuotaWindow?, weekly: QuotaWindow?,
+                           showRemaining: Bool, density: QuotaMenuDensity) -> QuotaMenuLabels {
+        func compact(_ window: QuotaWindow?) -> String {
+            usedLabel(window, showRemaining: showRemaining)
+                .replacingOccurrences(of: "%", with: "")
+        }
+        let primary = compact(fiveHour)
+        let secondary = density == .compact ? "·" + compact(weekly) : nil
+        return QuotaMenuLabels(primary: primary, secondary: secondary)
     }
 
     static func menuTooltip(provider: LLMProvider, snapshot: QuotaSnapshot?,
