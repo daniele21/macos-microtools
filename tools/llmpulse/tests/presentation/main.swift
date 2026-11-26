@@ -25,12 +25,32 @@ assertQuota(QuotaPresentation.weekly(codex, matching: codexFive, at: now)?.id ==
 assertQuota(QuotaPresentation.usedLabel(codexFive, showRemaining: false) == "89%", "used %")
 assertQuota(QuotaPresentation.usedLabel(codexFive, showRemaining: true) == "11%", "remaining %")
 let codexWeekly = QuotaPresentation.weekly(codex, matching: codexFive, at: now)
-assertQuota(QuotaPresentation.weeklyCompactLabel(codexWeekly, showRemaining: false) == " (72)",
-            "weekly displayed in parentheses, no redundant percent sign")
-assertQuota(QuotaPresentation.weeklyCompactLabel(codexWeekly, showRemaining: true) == " (28)",
-            "weekly obeys global remaining preference")
-assertQuota(QuotaPresentation.weeklyCompactLabel(nil, showRemaining: false) == " (—)",
-            "missing weekly shown as unknown, not zero")
+assertQuota(QuotaPresentation.menuLabels(fiveHour: codexFive, weekly: codexWeekly,
+    showRemaining: false, density: .compact).text == "89·72",
+    "compact shows both quotas without percentages or parentheses")
+assertQuota(QuotaPresentation.menuLabels(fiveHour: codexFive, weekly: codexWeekly,
+    showRemaining: true, density: .compact).text == "11·28",
+    "compact obeys remaining preference")
+assertQuota(QuotaPresentation.menuLabels(fiveHour: codexFive, weekly: nil,
+    showRemaining: false, density: .compact).text == "89·—",
+    "missing weekly is not zero")
+assertQuota(QuotaPresentation.menuLabels(fiveHour: nil, weekly: codexWeekly,
+    showRemaining: false, density: .compact).text == "—·72",
+    "missing 5h does not hide known weekly")
+assertQuota(QuotaPresentation.menuLabels(fiveHour: nil, weekly: nil,
+    showRemaining: false, density: .compact).text == "—·—", "no fabricated data")
+assertQuota(QuotaPresentation.menuLabels(fiveHour: codexFive, weekly: codexWeekly,
+    showRemaining: false, density: .minimal) == QuotaMenuLabels(primary: "89", secondary: nil),
+    "minimal omits weekly but keeps correct 5h")
+assertQuota(QuotaPresentation.menuLabels(fiveHour: nil, weekly: codexWeekly,
+    showRemaining: false, density: .minimal).text == "—",
+    "minimal never falls back to weekly")
+let full = window("full", "5h", 100)
+assertQuota(QuotaPresentation.menuLabels(fiveHour: full, weekly: full,
+    showRemaining: false, density: .compact).text == "100·100", "maximum width case")
+assertQuota(QuotaMenuDensity.compact.width == 60 && QuotaMenuDensity.minimal.width == 40,
+    "stable reduced width for each mode")
+assertQuota(QuotaMenuDensity(rawValue: "minimal") == .minimal, "density preference roundtrip")
 assertQuota(QuotaPresentation.menuTooltip(provider: .codex, snapshot: codex,
     fiveHour: codexFive, weekly: codexWeekly, showRemaining: false, at: now)
     .contains("7 giorni: 72% consumato"), "tooltip spells out weekly semantics")
@@ -40,9 +60,10 @@ let claude = snap(.claude, [
 ])
 assertQuota(QuotaPresentation.fiveHour(claude, at: now)?.remainingPercent == 96, "Claude session")
 assertQuota(QuotaPresentation.weekly(claude, matching: QuotaPresentation.fiveHour(claude, at: now), at: now)?.remainingPercent == 100, "Claude weekly")
-assertQuota(QuotaPresentation.weeklyCompactLabel(
-    QuotaPresentation.weekly(claude, matching: QuotaPresentation.fiveHour(claude, at: now),
-                             at: now), showRemaining: false) == " (0)",
+assertQuota(QuotaPresentation.menuLabels(
+    fiveHour: QuotaPresentation.fiveHour(claude, at: now),
+    weekly: QuotaPresentation.weekly(claude, matching: QuotaPresentation.fiveHour(claude, at: now), at: now),
+    showRemaining: false, density: .compact).text == "4·0",
     "true zero weekly used remains visible")
 let antigravity = snap(.antigravity, [
     window("gemini-weekly", "Gemini Models · 7 giorni", 1),
