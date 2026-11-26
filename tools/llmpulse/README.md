@@ -15,13 +15,16 @@ restarts, and updates all visible providers immediately.
 
 - **Compact (default):** icon and `12·7`, meaning 12% of the five-hour quota
   consumed and 7% of the weekly quota consumed. The weekly number is slightly
-  smaller. Fixed width: **72 pt** per provider.
+  smaller. Fixed width: **60 pt** per provider.
 - **Minimal:** icon and `12`, meaning 12% of the five-hour quota consumed.
   Weekly quota remains available in the tooltip and popover. Fixed width:
-  **48 pt** per provider.
+  **40 pt** per provider.
 
-With three providers visible, the total allocated widths are 216 pt and 144 pt
+With three providers visible, the total allocated widths are 180 pt and 120 pt
 respectively, compared with 288 pt previously (excluding system spacing).
+The icon and both numbers are drawn together as a native template image,
+with a two-point gap, instead of using the status button's image/title layout.
+AppKit font measurements are checked for `100·100` in native CI.
 There are no separate progress gauges, repeated percent signs or parentheses
 in the menu bar. Missing or stale values are always `—`, not fabricated
 zeros. The layout remains stable even at `100·100`. Compact is the default
