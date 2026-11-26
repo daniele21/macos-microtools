@@ -9,8 +9,8 @@ enum QuotaMenuDensity: String, CaseIterable {
 
     var width: Double {
         switch self {
-        case .compact: return 72
-        case .minimal: return 48
+        case .compact: return 60
+        case .minimal: return 40
         }
     }
 }
