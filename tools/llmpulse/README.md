@@ -7,55 +7,48 @@ LLMPulse reads and normalizes independent quota windows and shows **remaining pe
 time to reset, capture age and a warning/critical icon near exhaustion. No provider credentials,
 transcripts, conversation texts or session identifiers are written to disk.
 
-## Progressive-disclosure menu bar (v0.2)
+## Progressive-disclosure menu bar
 
-One LLMPulse process creates **three separate fixed-width status items**, with a
-provider symbol, a numeric five-hour utilization percentage, a smaller
-weekly number in parentheses, and a thin gauge. For example, `12% (28)`
-means **12% used in the past 5 hours** and **28% used in the weekly quota**.
-The parenthesized weekly figure is deliberately smaller, and turns amber/red
-only if the weekly remaining allowance becomes low. A missing/stale weekly
-value is shown as `(—)`, never as zero. The two numbers come from the same
-Codex limit or Antigravity model group; quotas are never summed.
+LLMPulse creates three separate, fixed-width macOS status items. Choose the
+density in the gear menu of any provider popover. The setting persists across
+restarts, and updates all visible providers immediately.
 
-You can read both figures without opening any popover. The default shows **used
-quota**; Settings can switch all three indicators to **remaining quota**. A near-limit quota changes color
-(orange at <=25% remaining, red at <=10%). Unknown/old readings show `—`,
-never a made-up `0%`.
+- **Compact (default):** icon and `12·7`, meaning 12% of the five-hour quota
+  consumed and 7% of the weekly quota consumed. The weekly number is slightly
+  smaller. Fixed width: **72 pt** per provider.
+- **Minimal:** icon and `12`, meaning 12% of the five-hour quota consumed.
+  Weekly quota remains available in the tooltip and popover. Fixed width:
+  **48 pt** per provider.
 
-Each icon opens **only that provider's** compact popup. You first see 5-hour
-and weekly quota plus reset information; expand **Altre quote / Gruppi e altre
-quote** to reveal additional buckets. Click the gear in any popup to configure
-used vs remaining, enabled providers and automatic polling. At least one icon
-always stays available so Settings remains reachable.
+With three providers visible, the total allocated widths are 216 pt and 144 pt
+respectively, compared with 288 pt previously (excluding system spacing).
+There are no separate progress gauges, repeated percent signs or parentheses
+in the menu bar. Missing or stale values are always `—`, not fabricated
+zeros. The layout remains stable even at `100·100`. Compact is the default
+for new and existing installations without a saved density preference.
+Minimal is a manual choice; macOS does not expose a reliable free-space
+measurement for third-party status items, so widths are not changed
+automatically according to other applications.
 
-**Antigravity has distinct group quotas**, not a unified 5-hour allowance.
-By default the menu bar displays the most limiting valid 5-hour bucket and
-its tooltip tells you which group it belongs to. To pin a family instead,
-open the Antigravity popup and expand `Gruppi e altre quote`, or choose the
-group in Settings. Weekly-only model families show `—` for their missing
-5-hour quota; their weekly reading remains visible after clicking.
+The icon and numbers use native, appearance-adaptive system colors for
+legibility against arbitrary menu-bar backgrounds. Provider identity remains
+recognizable by its symbol; teal, orange and indigo accents are used in
+the respective popover headers. Full-color quota bars and risk indicators
+remain in the popovers.
 
-The three menu items use a compact **96 pt fixed width** (instead of 112 pt),
-reducing horizontal gaps without shifting neighboring menu extras as values change
-between `9% (9)`, `99% (100)`, `100% (100)` and `— (—)`.
-Each provider keeps its identifiable macOS accent in the small quota gauge:
-**Codex teal**, **Claude orange**, **Antigravity indigo**. The icon and both
-numeric percentages use semantic, appearance-adaptive system label colors for
-legibility over arbitrary translucent menu-bar wallpapers and highlighted states.
-The five-hour value is 11pt semibold; weekly uses 10pt medium, but is no
-longer faded to low-contrast secondary gray. The gauge also has a neutral
-contrasting track/outline. Low allowances still use an orange/red gauge.
+Each icon opens only its provider's detail. Hover to see both percentages,
+their units and reset times; the global consumed/remaining setting applies
+to both. The gear also offers provider visibility and automatic polling.
+At least one provider remains visible so Settings stays accessible.
 
-Provider identification never depends on color alone: each item has its own
-symbol and a tooltip naming the provider, the five-hour/weekly quotas, and reset
-times. The final visual contrast depends on macOS window/menu-bar material and
-the desktop wallpaper and should be checked in both light and dark appearances.
-For additional contrast on macOS, use System Settings → Accessibility → Display →
-Increase Contrast / Reduce Transparency. The refresh
-timer runs every five minutes; a separate local-file check every 12 seconds
-picks up fresh Claude status-line events while the popup is closed. Existing
-provider sessions, no-session credential policy and cache format are unchanged.
+Antigravity has distinct model-group quotas. Its automatic mode shows
+the most limiting valid five-hour bucket and the corresponding weekly
+bucket, never a sum of unrelated quotas. Pin a group in the popover or
+Settings. Weekly-only groups show `—` for their absent five-hour quota.
+
+The refresh timer runs every five minutes; a separate local-file check
+every 12 seconds picks up fresh Claude status-line events. Provider
+integrations, cache format, and existing settings are unchanged.
 
 ## Install
 
