@@ -663,10 +663,103 @@ private struct LLMPulsePopover: View {
     }
 }
 
+// Render the icon and both text runs as a single native template image.
+// NSStatusBarButton no longer has to lay out an image AND a title separately,
+// which avoids their intrinsic inter-content spacing. macOS still tints
+// the whole image for its current menu-bar appearance and highlighted state.
+private enum MenuBarGlyph {
+    static let iconWidth: CGFloat = 12
+    static let gap: CGFloat = 2
+    static let height: CGFloat = 18
+
+    static func canvasWidth(_ density: QuotaMenuDensity) -> CGFloat {
+        CGFloat(density.width) - 4
+    }
+
+    static func attributed(_ labels: QuotaMenuLabels) -> NSAttributedString {
+        let title = NSMutableAttributedString(string: labels.primary, attributes: [
+            .font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .semibold),
+            .foregroundColor: NSColor.black
+        ])
+        if let secondary = labels.secondary {
+            title.append(NSAttributedString(string: secondary, attributes: [
+                .font: NSFont.monospacedDigitSystemFont(ofSize: 9.5, weight: .medium),
+                .foregroundColor: NSColor.black
+            ]))
+        }
+        return title
+    }
+
+    static func symbol(_ provider: LLMProvider) -> NSImage? {
+        let source = NSImage(systemSymbolName: QuotaStyle.symbol(provider),
+                             accessibilityDescription: provider.title)
+        return source?.withSymbolConfiguration(
+            NSImage.SymbolConfiguration(pointSize: 11, weight: .medium)) ?? source
+    }
+
+    static func image(provider: LLMProvider, labels: QuotaMenuLabels,
+                      density: QuotaMenuDensity) -> NSImage {
+        let text = attributed(labels)
+        let textSize = text.size()
+        let icon = symbol(provider)
+        let size = NSSize(width: canvasWidth(density), height: height)
+        let iconSpace: CGFloat = icon == nil ? 0 : iconWidth + gap
+        let contentWidth = iconSpace + ceil(textSize.width)
+        let image = NSImage(size: size, flipped: false) { rect in
+            let start = max(0, floor((rect.width - contentWidth) / 2))
+            if let icon, icon.size.width > 0, icon.size.height > 0 {
+                let scale = min(iconWidth / icon.size.width, 13 / icon.size.height)
+                let w = icon.size.width * scale
+                let h = icon.size.height * scale
+                icon.draw(in: NSRect(x: start + (iconWidth - w) / 2,
+                                     y: (rect.height - h) / 2, width: w, height: h),
+                          from: .zero, operation: .sourceOver, fraction: 1)
+            }
+            text.draw(at: NSPoint(x: start + iconSpace,
+                                  y: floor((rect.height - textSize.height) / 2)))
+            return true
+        }
+        image.isTemplate = true
+        return image
+    }
+
+    // Native CI measures the real AppKit fonts, rather than assuming a string
+    // character count guarantees that the largest quota will fit.
+    static func verifyLayout() -> Bool {
+        for density in QuotaMenuDensity.allCases {
+            for primary in ["0", "99", "100", "—"] {
+                for weekly in ["0", "99", "100", "—"] {
+                    let labels = QuotaMenuLabels(primary: primary,
+                        secondary: density == .compact ? "·" + weekly : nil)
+                    let bounds = attributed(labels).size()
+                    if iconWidth + gap + ceil(bounds.width) > canvasWidth(density) ||
+                        ceil(bounds.height) > height {
+                        fputs("LLMPulse menu layout overflow: \(density.rawValue) \(labels.text) \(bounds)\n", stderr)
+                        return false
+                    }
+                    for provider in LLMProvider.allCases {
+                        guard symbol(provider) != nil else {
+                            fputs("Missing menu symbol: \(provider.rawValue)\n", stderr)
+                            return false
+                        }
+                        let rendered = image(provider: provider, labels: labels, density: density)
+                        if !rendered.isTemplate || rendered.size.width != canvasWidth(density) {
+                            return false
+                        }
+                    }
+                }
+            }
+        }
+        print("LLMPulse native compact menu layout passed")
+        return true
+    }
+}
+
 private final class LLMPulseDelegate: NSObject, NSApplicationDelegate {
     private let popover = NSPopover()
     private let store = LLMPulseStore()
     private var statusItems: [LLMProvider: NSStatusItem] = [:]
+    private var renderedKeys: [LLMProvider: String] = [:]
     private var openedProvider: LLMProvider?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -679,16 +772,10 @@ private final class LLMPulseDelegate: NSObject, NSApplicationDelegate {
             button.tag = LLMProvider.allCases.firstIndex(of: provider) ?? 0
             button.target = self
             button.action = #selector(toggleProvider(_:))
-            let symbol = NSImage(systemSymbolName: QuotaStyle.symbol(provider),
-                                 accessibilityDescription: provider.title)
-            button.image = symbol?.withSymbolConfiguration(
-                NSImage.SymbolConfiguration(pointSize: 12, weight: .medium)) ?? symbol
-            // macOS should resolve the template symbol against the actual
-            // menu-bar material/highlight, rather than forcing a brand hue
-            // that becomes low-contrast over tinted desktop wallpapers.
-            button.image?.isTemplate = true
+            button.title = ""
             button.contentTintColor = nil
-            button.imagePosition = .imageLeft
+            button.imagePosition = .imageOnly
+            button.imageScaling = .scaleNone
             button.alignment = .center
             statusItems[provider] = item
         }
@@ -717,19 +804,12 @@ private final class LLMPulseDelegate: NSObject, NSApplicationDelegate {
             let labels = QuotaPresentation.menuLabels(
                 fiveHour: window, weekly: weekly,
                 showRemaining: store.showRemaining, density: store.menuDensity)
-            // Native template icon and semantic text retain contrast on either
-            // menu-bar appearance. Typographic hierarchy replaces the gauge.
-            let label = NSMutableAttributedString(string: labels.primary, attributes: [
-                .font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .semibold),
-                .foregroundColor: NSColor.labelColor
-            ])
-            if let secondary = labels.secondary {
-                label.append(NSAttributedString(string: secondary, attributes: [
-                    .font: NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .medium),
-                    .foregroundColor: NSColor.labelColor
-                ]))
+            let renderKey = store.menuDensity.rawValue + ":" + labels.text
+            if renderedKeys[provider] != renderKey || button.image == nil {
+                button.image = MenuBarGlyph.image(provider: provider, labels: labels,
+                                                  density: store.menuDensity)
+                renderedKeys[provider] = renderKey
             }
-            button.attributedTitle = label
             button.toolTip = QuotaPresentation.menuTooltip(
                 provider: provider, snapshot: store.snapshots[provider],
                 fiveHour: window, weekly: weekly, showRemaining: store.showRemaining,
@@ -759,6 +839,9 @@ private final class LLMPulseDelegate: NSObject, NSApplicationDelegate {
 
 @main struct LLMPulseMain {
     static func main() {
+        if CommandLine.arguments.contains("--test-menu-layout") {
+            exit(MenuBarGlyph.verifyLayout() ? 0 : 1)
+        }
         if CommandLine.arguments.contains("--claude-ingest") {
             exit(ClaudeIngest.ingest())
         }
