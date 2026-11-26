@@ -23,7 +23,7 @@ restarts, and updates all visible providers immediately.
 With three providers visible, the total allocated widths are 180 pt and 120 pt
 respectively, compared with 288 pt previously (excluding system spacing).
 The icon and both numbers are drawn together as a native template image,
-with a two-point gap, instead of using the status button's image/title layout.
+with a one-point gap, instead of using the status button's image/title layout.
 AppKit font measurements are checked for `100·100` in native CI.
 There are no separate progress gauges, repeated percent signs or parentheses
 in the menu bar. Missing or stale values are always `—`, not fabricated
