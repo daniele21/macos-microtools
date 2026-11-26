@@ -668,8 +668,8 @@ private struct LLMPulsePopover: View {
 // which avoids their intrinsic inter-content spacing. macOS still tints
 // the whole image for its current menu-bar appearance and highlighted state.
 private enum MenuBarGlyph {
-    static let iconWidth: CGFloat = 12
-    static let gap: CGFloat = 2
+    static let iconWidth: CGFloat = 11
+    static let gap: CGFloat = 1
     static let height: CGFloat = 18
 
     static func canvasWidth(_ density: QuotaMenuDensity) -> CGFloat {
@@ -683,7 +683,7 @@ private enum MenuBarGlyph {
         ])
         if let secondary = labels.secondary {
             title.append(NSAttributedString(string: secondary, attributes: [
-                .font: NSFont.monospacedDigitSystemFont(ofSize: 9.5, weight: .medium),
+                .font: NSFont.monospacedDigitSystemFont(ofSize: 9, weight: .medium),
                 .foregroundColor: NSColor.black
             ]))
         }
