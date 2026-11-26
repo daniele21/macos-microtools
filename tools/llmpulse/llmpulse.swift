@@ -22,6 +22,12 @@ final class LLMPulseStore: ObservableObject {
             didUpdate?()
         }
     }
+    @Published var menuDensity: QuotaMenuDensity {
+        didSet {
+            UserDefaults.standard.set(menuDensity.rawValue, forKey: "llmpulse.menuDensity")
+            didUpdate?()
+        }
+    }
     @Published private(set) var visibleProviders: Set<LLMProvider> {
         didSet {
             UserDefaults.standard.set(
@@ -45,6 +51,7 @@ final class LLMPulseStore: ObservableObject {
         let defaults = UserDefaults.standard
         autoRefresh = (defaults.object(forKey: "llmpulse.autoRefresh") as? Bool) ?? true
         showRemaining = (defaults.object(forKey: "llmpulse.showRemaining") as? Bool) ?? false
+        menuDensity = QuotaMenuDensity(rawValue: defaults.string(forKey: "llmpulse.menuDensity") ?? "") ?? .compact
         let hidden = Set((defaults.array(forKey: "llmpulse.hiddenProviders") as? [String]) ?? [])
         let enabled = LLMProvider.allCases.filter { !hidden.contains($0.rawValue) }
         // Preserve an escape route into Settings: never allow an empty menu bar.
@@ -172,19 +179,14 @@ private enum QuotaStyle {
         if remaining <= 25 { return Color(red: 0.88, green: 0.59, blue: 0.25) }
         return Color(red: 0.20, green: 0.65, blue: 0.57)
     }
-    // Native adaptive macOS colors: stable identification even when a quota
-    // has no data. Severity still overrides the numeric metric and gauge.
+    // Keep identity accents in the popover, rather than compromising
+    // text contrast in the translucent menu bar.
     static func brandTint(_ provider: LLMProvider) -> NSColor {
         switch provider {
         case .codex: return .systemTeal
         case .claude: return .systemOrange
         case .antigravity: return .systemIndigo
         }
-    }
-    static func statusTint(remaining: Double, provider: LLMProvider) -> NSColor {
-        if remaining <= 10 { return .systemRed }
-        if remaining <= 25 { return .systemOrange }
-        return brandTint(provider)
     }
     static func symbol(_ provider: LLMProvider) -> String {
         switch provider {
@@ -204,33 +206,6 @@ private enum QuotaStyle {
         if group == "Gemini Models" { return "Gemini" }
         if group == "Claude and GPT models" { return "Claude / GPT" }
         return group
-    }
-}
-
-// Purely decorative overlay. Mouse events pass to NSStatusBarButton.
-private final class QuotaGauge: NSView {
-    var progress: CGFloat = 0 { didSet { needsDisplay = true } }
-    var isAvailable = false { didSet { needsDisplay = true } }
-    var fillColor = NSColor.controlAccentColor { didSet { needsDisplay = true } }
-
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
-
-    override func draw(_ dirtyRect: NSRect) {
-        let rect = bounds.insetBy(dx: 0, dy: 0.5)
-        let track = NSBezierPath(roundedRect: rect, xRadius: 1, yRadius: 1)
-        NSColor.labelColor.withAlphaComponent(0.28).setFill()
-        track.fill()
-        guard isAvailable else { return }
-        let fill = NSRect(x: rect.minX, y: rect.minY,
-                          width: rect.width * max(0, min(1, progress)),
-                          height: rect.height)
-        fillColor.setFill()
-        NSBezierPath(roundedRect: fill, xRadius: 1, yRadius: 1).fill()
-        // Outline keeps the accent readable even when its hue happens to
-        // approach the luminosity of the translucent menu bar.
-        NSColor.labelColor.withAlphaComponent(0.50).setStroke()
-        track.lineWidth = 0.55
-        track.stroke()
     }
 }
 
@@ -373,7 +348,7 @@ private struct LLMPulsePopover: View {
                     Image(systemName: QuotaStyle.symbol(provider))
                         .font(.system(size: 15, weight: .medium))
                         .frame(width: 30, height: 30)
-                        .background(Color.primary.opacity(0.06),
+                        .background(Color(QuotaStyle.brandTint(provider)).opacity(0.17),
                                     in: RoundedRectangle(cornerRadius: 9))
                 }
                 VStack(alignment: .leading, spacing: 2) {
@@ -627,8 +602,25 @@ private struct LLMPulsePopover: View {
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
-                Text("Le tre icone mostrano la percentuale delle ultime 5 ore.")
+                Text("5h e quota settimanale sono percentuali. Il simbolo % resta nei dettagli.")
                     .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+            }
+            Divider()
+            VStack(alignment: .leading, spacing: 8) {
+                Text("DENSITÀ MENU BAR")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                Picker("Densità", selection: $store.menuDensity) {
+                    Text("Compact").tag(QuotaMenuDensity.compact)
+                    Text("Minimal").tag(QuotaMenuDensity.minimal)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                Text(store.menuDensity == .compact
+                     ? "12·7  —  5 ore · settimana"
+                     : "12  —  solo 5 ore; settimana al clic")
+                    .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }
             Divider()
@@ -675,22 +667,22 @@ private final class LLMPulseDelegate: NSObject, NSApplicationDelegate {
     private let popover = NSPopover()
     private let store = LLMPulseStore()
     private var statusItems: [LLMProvider: NSStatusItem] = [:]
-    private var gauges: [LLMProvider: QuotaGauge] = [:]
     private var openedProvider: LLMProvider?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // StatusBar inserts new items to the left: create in reverse order.
         for provider in LLMProvider.allCases.reversed() {
-            // Fixed 96pt: tighter spacing across the three menu extras, yet
-            // enough for the worst case "100% (100)" in monospaced fonts.
-            let item = NSStatusBar.system.statusItem(withLength: 96)
+            // Fixed per mode to avoid moving adjacent menu extras on updates.
+            let item = NSStatusBar.system.statusItem(withLength: CGFloat(store.menuDensity.width))
             item.isVisible = store.isVisible(provider)
             guard let button = item.button else { continue }
             button.tag = LLMProvider.allCases.firstIndex(of: provider) ?? 0
             button.target = self
             button.action = #selector(toggleProvider(_:))
-            button.image = NSImage(systemSymbolName: QuotaStyle.symbol(provider),
-                                   accessibilityDescription: provider.title)
+            let symbol = NSImage(systemSymbolName: QuotaStyle.symbol(provider),
+                                 accessibilityDescription: provider.title)
+            button.image = symbol?.withSymbolConfiguration(
+                NSImage.SymbolConfiguration(pointSize: 12, weight: .medium)) ?? symbol
             // macOS should resolve the template symbol against the actual
             // menu-bar material/highlight, rather than forcing a brand hue
             // that becomes low-contrast over tinted desktop wallpapers.
@@ -698,10 +690,6 @@ private final class LLMPulseDelegate: NSObject, NSApplicationDelegate {
             button.contentTintColor = nil
             button.imagePosition = .imageLeft
             button.alignment = .center
-            let gauge = QuotaGauge(frame: NSRect(x: 30, y: 2, width: 58, height: 3))
-            gauge.autoresizingMask = [.minYMargin]
-            button.addSubview(gauge)
-            gauges[provider] = gauge
             statusItems[provider] = item
         }
         popover.behavior = .transient
@@ -724,35 +712,29 @@ private final class LLMPulseDelegate: NSObject, NSApplicationDelegate {
             // Weekly must be tied to the SAME Codex/Antigravity quota family
             // as the 5h window. QuotaPresentation already enforces that.
             let weekly = store.weekly(provider)
-            let primaryText = QuotaPresentation.usedLabel(window,
-                                                           showRemaining: store.showRemaining)
-            let weeklyText = QuotaPresentation.weeklyCompactLabel(weekly,
-                                                                   showRemaining: store.showRemaining)
-            // Never use provider accents or tertiary/secondary label colors
-            // for small menu-bar text. The desktop wallpaper and menu-bar
-            // material are unpredictable, so readable foreground color must
-            // be semantic. Size/weight communicate the weekly hierarchy.
-            let foreground = NSColor.labelColor
-            let label = NSMutableAttributedString(string: primaryText, attributes: [
+            let width = CGFloat(store.menuDensity.width)
+            if item.length != width { item.length = width }
+            let labels = QuotaPresentation.menuLabels(
+                fiveHour: window, weekly: weekly,
+                showRemaining: store.showRemaining, density: store.menuDensity)
+            // Native template icon and semantic text retain contrast on either
+            // menu-bar appearance. Typographic hierarchy replaces the gauge.
+            let label = NSMutableAttributedString(string: labels.primary, attributes: [
                 .font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .semibold),
-                .foregroundColor: foreground
+                .foregroundColor: NSColor.labelColor
             ])
-            label.append(NSAttributedString(string: weeklyText, attributes: [
-                .font: NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .medium),
-                .foregroundColor: foreground
-            ]))
+            if let secondary = labels.secondary {
+                label.append(NSAttributedString(string: secondary, attributes: [
+                    .font: NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .medium),
+                    .foregroundColor: NSColor.labelColor
+                ]))
+            }
             button.attributedTitle = label
-            let gauge = gauges[provider]
-            gauge?.isAvailable = window != nil
-            gauge?.progress = CGFloat((store.showRemaining ?
-                window?.remainingPercent : window?.usedPercent) ?? 0) / 100
-            gauge?.fillColor = window.map {
-                QuotaStyle.statusTint(remaining: $0.remainingPercent, provider: provider)
-            } ?? .secondaryLabelColor
             button.toolTip = QuotaPresentation.menuTooltip(
                 provider: provider, snapshot: store.snapshots[provider],
                 fiveHour: window, weekly: weekly, showRemaining: store.showRemaining,
                 error: store.errors[provider])
+            button.setAccessibilityLabel(button.toolTip)
         }
     }
 
