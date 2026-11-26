@@ -13,4 +13,5 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
   make -B build-llmpulse
   /usr/bin/plutil -lint bin/LLMPulse.app/Contents/Info.plist
   /usr/bin/codesign --verify --strict bin/LLMPulse.app
+  bin/LLMPulse.app/Contents/MacOS/LLMPulse --test-menu-layout
 fi
