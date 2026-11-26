@@ -48,7 +48,7 @@ assertQuota(QuotaPresentation.menuLabels(fiveHour: nil, weekly: codexWeekly,
 let full = window("full", "5h", 100)
 assertQuota(QuotaPresentation.menuLabels(fiveHour: full, weekly: full,
     showRemaining: false, density: .compact).text == "100·100", "maximum width case")
-assertQuota(QuotaMenuDensity.compact.width == 72 && QuotaMenuDensity.minimal.width == 48,
+assertQuota(QuotaMenuDensity.compact.width == 60 && QuotaMenuDensity.minimal.width == 40,
     "stable reduced width for each mode")
 assertQuota(QuotaMenuDensity(rawValue: "minimal") == .minimal, "density preference roundtrip")
 assertQuota(QuotaPresentation.menuTooltip(provider: .codex, snapshot: codex,
