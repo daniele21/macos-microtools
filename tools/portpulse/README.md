@@ -71,7 +71,7 @@ Prima di inviare alcun segnale, PortPulse ripete la scansione e controlla
 che TUTTI i listener selezionati siano ancora presenti, senza cambiamenti
 di PID, proprietario, porta, indirizzo o membri del gruppo. Se cambia
 qualcosa, **non interrompe nessuno**. In caso di verifica riuscita invia
-un solo **SIGTERM per PID distinto**: non usa mai sudo o SIGKILL e non
+un solo **SIGTERM per PID distinto**: non usa sudo; SIGKILL richiede un'azione esplicita e non
 interpreta l'invio come prova dell'effettiva chiusura. Un processo può
 esporre anche altre porte oltre quelle visualizzate e i processi
 supervisionati possono riavviarsi.
@@ -119,3 +119,11 @@ classification, safe-stop eligibility and new-listener detection tests.
 
 If lsof fails, the menu bar shows **!** rather than a misleading zero.
 Compare with: **lsof -nP -iTCP -sTCP:LISTEN** from Terminal.
+
+## v0.5 — Service control and origin
+
+Stop (SIGTERM) and Forza (SIGKILL) are separate, explicitly confirmed actions for individual processes and groups. Cancel is the default. Fresh scans and native process start timestamp, UID and executable checks precede signaling; protected names and system paths are blocked. No sudo or automatic escalation. PID races cannot be eliminated entirely.
+
+Three seconds after signaling, rescan all observed TCP port numbers owned by the targets. Report freed/occupied ports and possible replacement listeners; a different PID is not proof of supervision. Never kill a replacement automatically.
+
+Project roots enrich rows and search via a batched cwd lookup cached for 60 seconds. Distinct known projects are separated; unknown non-generic services retain name-based grouping. Expand a listener (or Info in a group) for process ancestry, executable, category, sampled RSS/CPU, and established TCP socket count when available. No argv or remote endpoints retained. An empty or failed connection inspection may be unavailable rather than zero. No UDP, automatic idle detection, or supervisor control yet.
