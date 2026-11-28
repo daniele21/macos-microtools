@@ -1,14 +1,29 @@
 import Foundation
 
 // PortPulse: an on-device, read-only TCP listener monitor with an explicit,
-// user-confirmed SIGTERM action. No daemon, root helper, or network service.
+// user-confirmed SIGTERM/SIGKILL action. No daemon, root helper, or network service.
 
+struct PortIdentity: Hashable {
+    let seconds: UInt64
+    let microseconds: UInt64
+    let uid: Int
+    let executable: String?
+}
 struct PortListener: Hashable {
     let pid: Int32
     let command: String
     let uid: Int?
     let host: String
     let port: Int
+    let identity: PortIdentity?
+    let projectPath: String?
+
+    init(pid: Int32, command: String, uid: Int?, host: String, port: Int,
+         identity: PortIdentity? = nil, projectPath: String? = nil) {
+        self.pid = pid; self.command = command; self.uid = uid
+        self.host = host; self.port = port; self.identity = identity; self.projectPath = projectPath
+    }
+    var projectName: String? { projectPath.map { URL(fileURLWithPath: $0).lastPathComponent } }
 
     enum Scope: String { case local, network }
 
@@ -19,7 +34,7 @@ struct PortListener: Hashable {
         return .network
     }
 
-    var identifier: String { "\(pid)|\(host)|\(port)" }
+    var identifier: String { "\(pid)|\(identity?.seconds ?? 0)|\(identity?.microseconds ?? 0)|\(host)|\(port)" }
     var address: String { host.contains(":") ? "[\(host)]:\(port)" : "\(host):\(port)" }
 }
 
@@ -75,7 +90,19 @@ enum PortPulseCore {
 
     static func canTerminate(_ listener: PortListener, currentUID: Int, ownPID: Int32) -> Bool {
         listener.pid > 1 && listener.pid != ownPID &&
-        listener.uid == currentUID
+        listener.uid == currentUID && !isProtected(listener) &&
+        (listener.identity == nil || listener.identity?.uid == currentUID)
+    }
+    static func isProtected(_ listener: PortListener) -> Bool {
+        let names: Set<String> = ["controlcenter", "finder", "windowserver", "launchd", "kernel_task",
+            "mdnsresponder", "sharingd", "rapportd", "loginwindow", "syslogd", "systemuiserver",
+            "coreaudiod", "distnoted", "airportd", "unknown", "processo sconosciuto"]
+        let path = listener.identity?.executable ?? ""
+        return names.contains(listener.command.lowercased()) || path.hasPrefix("/System/") || path.hasPrefix("/usr/libexec/")
+    }
+    static func sameTarget(_ old: PortListener, _ fresh: PortListener) -> Bool {
+        old.identity != nil && old.identity == fresh.identity && old.pid == fresh.pid &&
+        old.uid == fresh.uid && old.command == fresh.command && old.host == fresh.host && old.port == fresh.port
     }
 }
 
@@ -106,7 +133,7 @@ extension PortPulseCore {
             String(listener.port).contains(term) ||
             String(listener.pid).contains(term) ||
             listener.command.lowercased().contains(term) ||
-            listener.host.lowercased().contains(term))
+            listener.host.lowercased().contains(term) || (listener.projectPath?.lowercased().contains(term) ?? false))
     }
 }
 
@@ -119,9 +146,43 @@ struct PortOriginInfo {
     let projectName: String?
     let projectPath: String?
     let elapsed: String?
+    var ancestry: [String] = []
+    var executable: String? = nil
+    var resources: String? = nil
+    var category: String? = nil
+    var connections: Int? = nil
 }
 
 enum PortPulseOriginCore {
+    static func category(service: String, executable: String?) -> String? {
+        let name = service.lowercased(), path = (executable ?? "").lowercased()
+        if ["llama-server", "ollama", "lmstudio", "mlx_lm.server"].contains(name) ||
+            path.contains("/lm studio.app/") || path.contains("/ollama.app/") { return "Local AI" }
+        if ["next.js", "astro", "vite", "uvicorn", "flask", "node", "python", "python3"].contains(name) { return "Development" }
+        if ["postgres", "postgresql", "redis-server", "mysqld", "mongod"].contains(name) { return "Database" }
+        if name.contains("docker") || name.contains("orbstack") || name.contains("colima") { return "Container" }
+        if ["ssh", "sshd", "cloudflared", "tailscaled"].contains(name) || name.contains("runner") { return "Infrastructure" }
+        if path.hasPrefix("/system/") { return "macOS" }
+        return nil
+    }
+
+    static func ancestry(_ output: String, pid: Int32) -> [String] {
+        var table: [Int32: (Int32, String)] = [:]
+        for line in output.split(whereSeparator: \.isNewline) {
+            let f = line.split(maxSplits: 2, whereSeparator: \.isWhitespace)
+            guard f.count == 3, let id = Int32(f[0]), let parent = Int32(f[1]) else { continue }
+            table[id] = (parent, String(f[2]))
+        }
+        var current = pid
+        var seen = Set<Int32>()
+        var result: [String] = []
+        while current > 1, seen.insert(current).inserted, let entry = table[current], result.count < 8 {
+            result.append(URL(fileURLWithPath: entry.1).lastPathComponent)
+            current = entry.0
+        }
+        return result.reversed()
+    }
+
     static func serviceName(lsofName: String, psCommand: String?) -> String {
         let command = (psCommand ?? "").lowercased()
         if command.contains("next-server") ||
@@ -230,6 +291,9 @@ enum PortPulseGrouping {
         // Unknown or generic names are not enough evidence of one logical
         // service when multiple interpreter processes share that name.
         let normalized = name.isEmpty ? "unknown" : name
+        if let project = listener.projectPath {
+            return "\(normalized)|uid:\(listener.uid ?? -1)|project:\(project)"
+        }
         if genericRuntimes.contains(normalized) || normalized == "unknown" ||
             normalized == "processo sconosciuto" {
             return normalized + "|pid:\(listener.pid)"
@@ -300,6 +364,21 @@ struct PortPulseDiff {
 import AppKit
 import Darwin
 
+extension PortIdentity {
+    static func read(_ pid: Int32) -> PortIdentity? {
+        var info = proc_bsdinfo()
+        let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+        guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size else { return nil }
+        var buffer = [CChar](repeating: 0, count: 4096)
+        let length = buffer.withUnsafeMutableBytes { raw in
+            proc_pidpath(pid, raw.baseAddress, UInt32(raw.count))
+        }
+        let path = length > 0 ? String(cString: buffer) : nil
+        return PortIdentity(seconds: info.pbi_start_tvsec, microseconds: info.pbi_start_tvusec,
+                            uid: Int(info.pbi_uid), executable: path)
+    }
+}
+
 enum PortScanner {
     enum ScanError: LocalizedError {
         case unavailable(String)
@@ -308,6 +387,9 @@ enum PortScanner {
         }
     }
 
+    private struct CachedProject { let path: String?; let date: Date }
+    // Scanner is called from one serial queue.
+    private static var projects: [PortIdentity: CachedProject] = [:]
     static func scan() throws -> [PortListener] {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
@@ -329,7 +411,36 @@ enum PortScanner {
         guard process.terminationStatus == 0 else {
             throw ScanError.unavailable("lsof non riuscito (exit \(process.terminationStatus)): \(output.prefix(180))")
         }
-        return PortPulseCore.parse(output)
+        let raw = PortPulseCore.parse(output)
+        var identities: [Int32: PortIdentity] = [:]
+        for pid in Set(raw.map(\.pid)) { identities[pid] = PortIdentity.read(pid) }
+        let active = Set(identities.values)
+        projects = projects.filter { active.contains($0.key) && Date().timeIntervalSince($0.value.date) < 60 }
+        let missing = identities.filter { $0.value.uid == Int(getuid()) && projects[$0.value] == nil }
+        let pids = Array(missing.keys.sorted().prefix(128))
+        if !pids.isEmpty {
+            let args = ["-nP", "-a", "-p", pids.map(String.init).joined(separator: ","), "-d", "cwd", "-Fpn"]
+            let output = PortProcessInspector.command("/usr/sbin/lsof", args)
+            var current: Int32?
+            var paths: [Int32: String] = [:]
+            for line in (output ?? "").split(whereSeparator: \.isNewline) {
+                if line.hasPrefix("p") { current = Int32(line.dropFirst()) }
+                else if line.hasPrefix("n/"), let current { paths[current] = String(line.dropFirst()) }
+            }
+            for pid in pids {
+                guard let id = identities[pid], PortIdentity.read(pid) == id else { continue }
+                let location = PortPulseOriginCore.projectLocation(cwd: paths[pid]) {
+                    FileManager.default.fileExists(atPath: $0 + "/.git")
+                }
+                projects[id] = CachedProject(path: location?.path, date: Date())
+            }
+        }
+        return raw.map { item in
+            let identity = identities[item.pid]
+            return PortListener(pid: item.pid, command: item.command, uid: item.uid,
+                host: item.host, port: item.port, identity: identity,
+                projectPath: identity.flatMap { projects[$0]?.path })
+        }
     }
 }
 
@@ -337,7 +448,7 @@ enum PortScanner {
 // Separate from PortScanner: no extra work is performed on the periodic polling
 // path. All commands execute without a shell and only on explicit row expansion.
 enum PortProcessInspector {
-    private static func command(_ executable: String, _ args: [String]) -> String? {
+    static func command(_ executable: String, _ args: [String]) -> String? {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: executable)
         task.arguments = args
@@ -367,13 +478,31 @@ enum PortProcessInspector {
         let location = PortPulseOriginCore.projectLocation(cwd: cwd) { path in
             FileManager.default.fileExists(atPath: path + "/.git")
         }
-        return PortOriginInfo(
+        var result = PortOriginInfo(
             service: PortPulseOriginCore.serviceName(lsofName: listener.command,
                                                        psCommand: ps.command),
             projectName: location?.name,
             projectPath: location?.path,
             elapsed: PortPulseOriginCore.elapsedLabel(ps.elapsed)
         )
+        result.executable = PortIdentity.read(listener.pid)?.executable
+        result.category = PortPulseOriginCore.category(service: result.service, executable: result.executable)
+        if let tree = command("/bin/ps", ["-axww", "-o", "pid=", "-o", "ppid=", "-o", "comm="]) {
+            result.ancestry = PortPulseOriginCore.ancestry(tree, pid: listener.pid)
+        }
+        if let usage = command("/bin/ps", ["-p", pid, "-o", "rss=", "-o", "%cpu="]) {
+            let fields = usage.split(whereSeparator: \.isWhitespace)
+            if fields.count == 2, let rss = Double(fields[0]), let cpu = Double(fields[1]) {
+                result.resources = String(format: "%.0f MB RAM · %.1f%% CPU", rss / 1024, cpu)
+            }
+        }
+        if let sockets = command("/usr/sbin/lsof", ["-nP", "-a", "-p", pid, "-iTCP", "-sTCP:ESTABLISHED", "-Ff"]) {
+            result.connections = sockets.split(whereSeparator: \.isNewline).filter { $0.hasPrefix("f") }.count
+        }
+        if let expected = listener.identity, PortIdentity.read(listener.pid) != expected {
+            return PortOriginInfo(service: listener.command, projectName: nil, projectPath: nil, elapsed: nil)
+        }
+        return result
     }
 }
 
@@ -434,8 +563,8 @@ private enum PortPulsePalette {
 final class PortPulseViewController: NSViewController {
     var onRefresh: (() -> Void)?
     var onQuit: (() -> Void)?
-    var onStop: ((PortListener) -> Void)?
-    var onStopGroup: ((PortGroup) -> Void)?
+    var onStop: ((PortListener, Int32) -> Void)?
+    var onStopGroup: ((PortGroup, Int32) -> Void)?
     var onInspect: ((PortListener) -> Void)?
 
     private let titleField = NSTextField(labelWithString: "PortPulse")
@@ -459,6 +588,7 @@ final class PortPulseViewController: NSViewController {
     private var lastError: String?
     private var latestEvent: PortListener?
     private var hasLoaded = false
+    private var actionMessage: String?
 
     override func loadView() {
         let root = PortPulseRootView(frame: NSRect(x: 0, y: 0, width: 426, height: 590))
@@ -734,7 +864,7 @@ final class PortPulseViewController: NSViewController {
             footerField.stringValue = "Errore: \(error.prefix(55))"
             footerField.textColor = .systemOrange
         } else {
-            footerField.stringValue = "TCP · aggiornamento ogni 5 s"
+            footerField.stringValue = actionMessage ?? "TCP · aggiornamento ogni 5 s"
             footerField.textColor = .tertiaryLabelColor
         }
         if let event = latestEvent {
@@ -812,8 +942,8 @@ final class PortPulseViewController: NSViewController {
         let dot = surface(fill: tint, radius: 4)
         dot.widthAnchor.constraint(equalToConstant: 8).isActive = true
         dot.heightAnchor.constraint(equalToConstant: 8).isActive = true
-        let name = label(group.name, size: 13, weight: .semibold)
-        let countLabel = label("\(group.ports.count) porte · \(group.pids.count) processi",
+        let name = label(group.listeners.first?.projectName ?? group.name, size: 13, weight: .semibold)
+        let countLabel = label("\(group.name) · \(group.ports.count) porte · \(group.pids.count) PID",
                                size: 10, color: .secondaryLabelColor)
         let stack = vertical([name, countLabel], spacing: 2)
         let badge = makeBadge(group.isNetwork ? "Rete" : "Locale", tint: tint)
@@ -856,22 +986,32 @@ final class PortPulseViewController: NSViewController {
                 number.widthAnchor.constraint(equalToConstant: 45).isActive = true
                 let metadata = label("\(entry.host) · PID \(entry.pid)", size: 10,
                                      color: .secondaryLabelColor)
-                let line = horizontal([number, metadata, NSView()], spacing: 6)
-                line.heightAnchor.constraint(equalToConstant: 23).isActive = true
+                let inspect = smallButton("Info", symbol: "info.circle", action: #selector(rowClicked(_:)))
+                inspect.tag = visible.firstIndex(of: entry) ?? -1
+                let line = horizontal([number, metadata, NSView(), inspect], spacing: 6)
+                line.heightAnchor.constraint(equalToConstant: 29).isActive = true
                 children.addArrangedSubview(line)
                 line.widthAnchor.constraint(equalTo: children.widthAnchor).isActive = true
+                if selectedID == entry.identifier {
+                    let detail = detailView(for: entry)
+                    children.addArrangedSubview(detail)
+                    detail.widthAnchor.constraint(equalTo: children.widthAnchor).isActive = true
+                }
             }
             sections.append(children)
 
             let stop = smallButton("Termina gruppo…", symbol: "stop.circle",
                                    action: #selector(stopGroupClicked))
             stop.contentTintColor = .systemRed
-            stop.isEnabled = isFullGroupVisible(group) &&
+            stop.isEnabled = isFullGroupVisible(group) && group.listeners.allSatisfy { $0.identity?.executable != nil } &&
                 PortPulseGrouping.canStop(group, currentUID: Int(getuid()), ownPID: getpid())
             stop.toolTip = stop.isEnabled
                 ? "Arresta tutti i \(group.pids.count) processi dopo conferma"
                 : "Non consentito o gruppo parzialmente filtrato: mostra tutte le porte del servizio"
-            let actionRow = horizontal([stop, NSView()], spacing: 6)
+            let force = smallButton("Forza…", symbol: "bolt", action: #selector(forceGroupClicked))
+            force.contentTintColor = .systemRed
+            force.isEnabled = stop.isEnabled
+            let actionRow = horizontal([stop, force, NSView()], spacing: 6)
             sections.append(actionRow)
         }
         let body = vertical(sections, spacing: expanded ? 8 : 0)
@@ -918,7 +1058,7 @@ final class PortPulseViewController: NSViewController {
         line.heightAnchor.constraint(equalToConstant: 25).isActive = true
         let info = detailsByID[item.identifier]?.info
         let process = label(info?.service ?? item.command, size: 12, weight: .semibold)
-        let subline = info?.projectName ?? "\(item.host) · PID \(item.pid)"
+        let subline = info?.projectName ?? item.projectName ?? "\(item.host) · PID \(item.pid)"
         let metadata = label(subline, size: 10, color: .secondaryLabelColor)
         metadata.toolTip = info?.projectPath ?? item.address
         let textColumn = vertical([process, metadata], spacing: 2)
@@ -967,6 +1107,7 @@ final class PortPulseViewController: NSViewController {
             let detailLine = label(detailText, size: 11, color: .secondaryLabelColor)
             detailLine.toolTip = item.address
             elements.append(detailLine)
+            elements.append(detailView(for: item))
 
             var actions: [NSView] = []
             if let path = info?.projectPath {
@@ -978,9 +1119,13 @@ final class PortPulseViewController: NSViewController {
             let stop = smallButton("Termina…", symbol: "stop.circle",
                                    action: #selector(stopClicked))
             stop.contentTintColor = .systemRed
-            stop.isEnabled = PortPulseCore.canTerminate(item, currentUID: Int(getuid()), ownPID: getpid())
+            stop.isEnabled = item.identity?.executable != nil && PortPulseCore.canTerminate(item, currentUID: Int(getuid()), ownPID: getpid())
             stop.toolTip = stop.isEnabled ? "Invia SIGTERM dopo conferma" : "Solo processi verificati del tuo utente"
             actions.append(stop)
+            let force = smallButton("Forza…", symbol: "bolt", action: #selector(forceClicked))
+            force.contentTintColor = .systemRed
+            force.isEnabled = stop.isEnabled
+            actions.append(force)
             let actionRow = horizontal(actions, spacing: 7)
             elements.append(actionRow)
         }
@@ -1005,6 +1150,26 @@ final class PortPulseViewController: NSViewController {
             inside.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: selected ? -11 : -3)
         ])
         return card
+    }
+
+    private func detailView(for item: PortListener) -> NSView {
+        guard let info = detailsByID[item.identifier]?.info else {
+            return label("Origine in identificazione…", size: 10, color: .secondaryLabelColor)
+        }
+        var lines: [NSView] = []
+        func add(_ value: String) {
+            let field = label(value, size: 10, color: .secondaryLabelColor)
+            field.toolTip = value
+            lines.append(field)
+        }
+        if let category = info.category { add(category + " · " + info.service) }
+        if let project = info.projectName { add("Progetto: " + project) }
+        if !info.ancestry.isEmpty { add("Origine: " + info.ancestry.joined(separator: " → ")) }
+        else { add("Origine non disponibile") }
+        if let path = info.executable { add("Eseguibile: " + path) }
+        if let resources = info.resources { add(resources) }
+        if let connections = info.connections { add("Connessioni TCP attive: \(connections) (processo)") }
+        return vertical(lines, spacing: 3)
     }
 
     private func smallButton(_ text: String, symbol: String, action: Selector) -> NSButton {
@@ -1072,27 +1237,22 @@ final class PortPulseViewController: NSViewController {
         rebuild()
     }
 
-    @objc private func stopGroupClicked() {
-        guard grouped,
-              let expandedGroupKey,
+    @objc private func stopGroupClicked() { confirmGroup(SIGTERM) }
+    @objc private func forceGroupClicked() { confirmGroup(SIGKILL) }
+
+    private func confirmGroup(_ signal: Int32) {
+        guard grouped, let expandedGroupKey,
               let group = visibleGroups.first(where: { $0.key == expandedGroupKey }),
-              isFullGroupVisible(group),
-              PortPulseGrouping.canStop(group, currentUID: Int(getuid()),
-                                        ownPID: getpid()) else { return }
-        let ports = group.ports.map(String.init).joined(separator: ", ")
+              isFullGroupVisible(group), group.listeners.allSatisfy({ $0.identity?.executable != nil }),
+              PortPulseGrouping.canStop(group, currentUID: Int(getuid()), ownPID: getpid()) else { return }
+        let force = signal == SIGKILL
         let alert = NSAlert()
-        alert.messageText = "Terminare \(group.pids.count) processi \(group.name)?"
-        alert.informativeText =
-            "Porte selezionate: \(ports)\n" +
-            "Invierà SIGTERM ai \(group.pids.count) PID distinti. " +
-            "Può interrompere lavori in corso e altre porte degli stessi processi. " +
-            "Tutti i listener saranno ricontrollati prima dell'arresto. Nessun SIGKILL."
+        alert.messageText = "\(force ? "Forzare arresto di" : "Terminare") \(group.pids.count) processi \(group.name)?"
+        alert.informativeText = "Porte: \(group.ports.map(String.init).joined(separator: ", "))\n\(force ? "SIGKILL" : "SIGTERM") ai PID selezionati. Può chiudere altre porte e interrompere lavori in corso. " + (force ? "Possibile perdita di dati non salvati." : "Nessun SIGKILL automatico.")
         alert.alertStyle = .warning
         alert.addButton(withTitle: "Annulla")
-        alert.addButton(withTitle: "Termina \(group.pids.count) processi")
-        if alert.runModal() == .alertSecondButtonReturn {
-            onStopGroup?(group)
-        }
+        alert.addButton(withTitle: force ? "Forza arresto" : "Termina gruppo")
+        if alert.runModal() == .alertSecondButtonReturn { onStopGroup?(group, signal) }
     }
 
     @objc private func filtersChanged() { rebuild(resetScroll: true) }
@@ -1130,19 +1290,23 @@ final class PortPulseViewController: NSViewController {
         if !opened { footerField.stringValue = "Impossibile aprire il progetto" }
     }
 
-    @objc private func stopClicked() {
-        guard let item = selected,
+    @objc private func stopClicked() { confirmStop(SIGTERM) }
+    @objc private func forceClicked() { confirmStop(SIGKILL) }
+
+    private func confirmStop(_ signal: Int32) {
+        guard let item = selected, item.identity?.executable != nil,
               PortPulseCore.canTerminate(item, currentUID: Int(getuid()), ownPID: getpid()) else { return }
+        let force = signal == SIGKILL
         let alert = NSAlert()
-        alert.messageText = "Arrestare \(item.command)?"
-        alert.informativeText = "PID \(item.pid) · \(item.address)\nIl processo riceverà SIGTERM. Potrebbe interrompere lavori in corso. Nessun SIGKILL automatico."
+        alert.messageText = "\(force ? "Forzare arresto di" : "Arrestare") \(item.command)?"
+        alert.informativeText = "PID \(item.pid) · \(item.address)\n\(force ? "SIGKILL" : "SIGTERM"). Può chiudere altre porte e interrompere lavori in corso. " + (force ? "Possibile perdita di dati non salvati." : "Nessun SIGKILL automatico.")
         alert.alertStyle = .warning
-        alert.addButton(withTitle: "Invia SIGTERM")
         alert.addButton(withTitle: "Annulla")
-        if alert.runModal() == .alertFirstButtonReturn { onStop?(item) }
+        alert.addButton(withTitle: force ? "Forza arresto" : "Termina")
+        if alert.runModal() == .alertSecondButtonReturn { onStop?(item, signal) }
     }
 
-    func showActionResult(_ message: String) { footerField.stringValue = message }
+    func showActionResult(_ message: String) { actionMessage = message; footerField.stringValue = message; footerField.toolTip = message }
     @objc private func refreshClicked() { onRefresh?() }
     @objc private func quitClicked() { onQuit?() }
 }
@@ -1216,9 +1380,9 @@ final class PortPulseApp: NSObject, NSApplicationDelegate {
         popover.contentViewController = controller
         controller.onQuit = { NSApp.terminate(nil) }
         controller.onRefresh = { [weak self] in self?.refresh() }
-        controller.onStop = { [weak self] listener in self?.terminate(listener) }
-        controller.onStopGroup = { [weak self] group in
-            self?.terminateGroup(group)
+        controller.onStop = { [weak self] listener, signal in self?.terminate(listener, signal: signal) }
+        controller.onStopGroup = { [weak self] group, signal in
+            self?.terminateGroup(group, signal: signal)
         }
         controller.onInspect = { [weak self] listener in
             self?.inspectQueue.async { [weak self] in
@@ -1283,69 +1447,63 @@ final class PortPulseApp: NSObject, NSApplicationDelegate {
     }
 
 
-    private func terminateGroup(_ selected: PortGroup) {
-        controller.showActionResult("Verifica di \(selected.pids.count) processi…")
+    private var stopping = false
+    private func terminateGroup(_ selected: PortGroup, signal: Int32) {
+        stop(selected.listeners, group: selected, signal: signal)
+    }
+    private func terminate(_ listener: PortListener, signal: Int32) {
+        stop([listener], group: nil, signal: signal)
+    }
+    private func stop(_ targets: [PortListener], group: PortGroup?, signal: Int32) {
+        guard !stopping, signal == SIGTERM || signal == SIGKILL else { return }
+        stopping = true
+        controller.showActionResult("Verifica e arresto…")
         queue.async { [weak self] in
             let result: String
             do {
-                let all = try PortScanner.scan()
-                // Compare against every currently listening endpoint of this
-                // service, including ports that might otherwise be hidden by
-                // a UI filter. Any membership change aborts before signaling.
-                let fresh = PortPulseGrouping.groups(all)
-                    .first(where: { $0.key == selected.key })
-                guard PortPulseGrouping.validateStop(selected, against: fresh,
-                                                     currentUID: Int(getuid()),
-                                                     ownPID: getpid()) else {
-                    throw PortScanner.ScanError.unavailable(
-                        "Il gruppo è cambiato o include processi non consentiti. Nessun arresto eseguito."
-                    )
-                }
-                var sent = 0
-                var failed = 0
-                for pid in selected.pids {
-                    if Darwin.kill(pid, SIGTERM) == 0 {
-                        sent += 1
-                    } else {
-                        failed += 1
+                let fresh = try PortScanner.scan()
+                let ownUID = Int(getuid()), ownPID = getpid()
+                guard !targets.isEmpty, targets.allSatisfy({ target in
+                    target.identity?.executable != nil &&
+                    PortPulseCore.canTerminate(target, currentUID: ownUID, ownPID: ownPID) &&
+                    fresh.contains { PortPulseCore.sameTarget(target, $0) }
+                }) else { throw PortScanner.ScanError.unavailable("Identità o porta cambiata: arresto annullato.") }
+                if let group {
+                    let current = PortPulseGrouping.groups(fresh).first { $0.key == group.key }
+                    guard PortPulseGrouping.validateStop(group, against: current, currentUID: ownUID, ownPID: ownPID) else {
+                        throw PortScanner.ScanError.unavailable("Gruppo cambiato: nessun arresto.")
                     }
                 }
-                result = failed == 0
-                    ? "SIGTERM inviato a \(sent) processi"
-                    : "SIGTERM: \(sent) inviati, \(failed) non riusciti"
-            } catch {
-                result = error.localizedDescription
-            }
-            DispatchQueue.main.async {
-                self?.controller.showActionResult(result)
-                self?.refresh()
-            }
-        }
-    }
-
-    private func terminate(_ listener: PortListener) {
-        guard PortPulseCore.canTerminate(listener, currentUID: Int(getuid()), ownPID: getpid()) else { return }
-        controller.showActionResult("Verifica processo in corso…")
-        queue.async { [weak self] in
-            let outcome: String
-            do {
-                let fresh = try PortScanner.scan()
-                // Recheck endpoint, UID and command to avoid stopping a recycled PID.
-                guard fresh.contains(where: {
-                    $0.pid == listener.pid && $0.command == listener.command &&
-                    $0.uid == listener.uid && $0.host == listener.host && $0.port == listener.port
-                }) else {
-                    throw PortScanner.ScanError.unavailable("Processo o porta cambiati: arresto annullato.")
+                let byPID = Dictionary(grouping: targets, by: \.pid)
+                let ports = Set(fresh.filter { byPID[$0.pid] != nil }.map(\.port))
+                guard byPID.allSatisfy({ entry in PortIdentity.read(entry.key) == entry.value[0].identity }) else {
+                    throw PortScanner.ScanError.unavailable("Identità cambiata: nessun arresto.")
                 }
-                if Darwin.kill(listener.pid, SIGTERM) == 0 {
-                    outcome = "SIGTERM inviato al PID \(listener.pid)"
-                } else {
-                    outcome = "SIGTERM non riuscito (errno \(errno))"
+                var failures = 0
+                for (pid, rows) in byPID {
+                    guard PortIdentity.read(pid) == rows[0].identity else { failures += 1; continue }
+                    if Darwin.kill(pid, signal) != 0 { failures += 1 }
                 }
-            } catch { outcome = error.localizedDescription }
+                Thread.sleep(forTimeInterval: 3)
+                let after = try PortScanner.scan()
+                let occupied = after.filter { ports.contains($0.port) }
+                let remaining = Set(occupied.map(\.port))
+                let freed = ports.subtracting(remaining).count
+                let replaced = occupied.contains { row in
+                    guard let prior = byPID[row.pid]?.first else { return true }
+                    return row.identity != prior.identity
+                }
+                var message = "\(freed)/\(ports.count) porte liberate"
+                if replaced { message += " · altro listener / possibile riavvio" }
+                else if !remaining.isEmpty { message += signal == SIGTERM ? " · ancora occupate: usa Forza…" : " · ancora occupate" }
+                if failures > 0 { message += " · \(failures) segnali non riusciti" }
+                result = message
+            } catch { result = error.localizedDescription }
             DispatchQueue.main.async {
-                self?.controller.showActionResult(outcome)
-                self?.refresh()
+                guard let self else { return }
+                self.stopping = false
+                self.controller.showActionResult(result)
+                self.refresh()
             }
         }
     }

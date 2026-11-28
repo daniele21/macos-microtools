@@ -187,6 +187,21 @@ struct PortPulseTests {
         ])[0]
         expect(mixedScope.isNetwork, "network warning takes precedence for group")
 
+        expect(!PortPulseCore.canTerminate(protected.listeners[0], currentUID: 501, ownPID: 999), "individual system protection")
+        let identity = PortIdentity(seconds: 100, microseconds: 1, uid: 501, executable: "/opt/homebrew/bin/node")
+        let recycled = PortIdentity(seconds: 101, microseconds: 1, uid: 501, executable: "/opt/homebrew/bin/node")
+        let first = PortListener(pid: 51, command: "node", uid: 501, host: "::1", port: 4000, identity: identity, projectPath: "/tmp/A")
+        let second = PortListener(pid: 52, command: "node", uid: 501, host: "::1", port: 4001, identity: identity, projectPath: "/tmp/A")
+        let other = PortListener(pid: 53, command: "node", uid: 501, host: "::1", port: 4002, identity: identity, projectPath: "/tmp/B")
+        let reused = PortListener(pid: 51, command: "node", uid: 501, host: "::1", port: 4000, identity: recycled, projectPath: "/tmp/A")
+        expect(PortPulseCore.sameTarget(first, first), "verified target")
+        expect(!PortPulseCore.sameTarget(first, reused), "PID reuse rejected")
+        expect(!PortPulseCore.sameTarget(own, own), "unknown identity rejected")
+        expect(PortPulseGrouping.groups([first, second, other]).count == 2, "project-aware grouping")
+        expect(PortPulseCore.matches(first, filter: 0, search: "/tmp/a"), "project search")
+        expect(PortPulseOriginCore.ancestry("10 1 /bin/zsh\n20 10 /opt/homebrew/bin/node", pid: 20) == ["zsh", "node"], "process ancestry")
+        expect(PortPulseOriginCore.category(service: "llama-server", executable: nil) == "Local AI", "local AI classification")
+
         var diff = PortPulseDiff()
         expect(diff.newNetworkListeners(results).isEmpty, "first scan establishes baseline")
         expect(diff.newNetworkListeners(results).isEmpty, "steady state does not alert")
