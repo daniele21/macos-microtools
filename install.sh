@@ -6,8 +6,9 @@ PREFIX="${HOME}/.local/bin"
 mkdir -p "${PREFIX}"
 
 echo "==> Building MenuMeter..."
-swiftc -O tools/menumeter/menumeter.swift -o "${PREFIX}/menumeter"
-cp tools/menumeter/menumeter.swift "${PREFIX}/menumeter.swift"
+make build-menumeter
+install -m 755 bin/menumeter "${PREFIX}/menumeter"
+cp bin/menumeter-combined.swift "${PREFIX}/menumeter.swift"
 
 echo "✓ MenuMeter installed to ${PREFIX}/menumeter"
 

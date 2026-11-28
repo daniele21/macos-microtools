@@ -1,0 +1,23 @@
+name: LEDPulse macOS validation
+on:
+  pull_request:
+    paths:
+      - 'tools/ledpulse/**'
+      - 'tools/shared/**'
+      - '.github/workflows/ledpulse.yml'
+  push:
+    branches: [main, feat/ledpulse-smc-discovery]
+    paths:
+      - 'tools/ledpulse/**'
+      - 'tools/shared/**'
+      - '.github/workflows/ledpulse.yml'
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Native build and mock protocol tests (no hardware access)
+        run: make -C tools/ledpulse test
