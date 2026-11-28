@@ -9,16 +9,19 @@ all: build
 bin:
 	mkdir -p bin
 
-bin/menumeter: tools/menumeter/menumeter.swift | bin
-	$(SWIFTC) $(SWIFTFLAGS) -framework AppKit -framework IOKit tools/menumeter/menumeter.swift -o bin/menumeter
+bin/menumeter-combined.swift: tools/shared/AppleSMC.swift tools/menumeter/menumeter.swift | bin
+	cat $^ > $@
+
+bin/menumeter: bin/menumeter-combined.swift | bin
+	$(SWIFTC) $(SWIFTFLAGS) -framework AppKit -framework IOKit bin/menumeter-combined.swift -o bin/menumeter
 
 .PHONY: build-menumeter test-menumeter refresh-menumeter
 
 build-menumeter: bin/menumeter
 
-test-menumeter: | bin
-	$(SWIFTC) -typecheck -framework AppKit -framework IOKit tools/menumeter/menumeter.swift
-	$(SWIFTC) -D MENUMETER_TEST -framework AppKit -framework IOKit tools/menumeter/menumeter.swift -o bin/menumeter-tests
+test-menumeter: bin/menumeter-combined.swift | bin
+	$(SWIFTC) -typecheck -framework AppKit -framework IOKit bin/menumeter-combined.swift
+	$(SWIFTC) -D MENUMETER_TEST -framework AppKit -framework IOKit bin/menumeter-combined.swift -o bin/menumeter-tests
 	./bin/menumeter-tests
 
 # Rebuild and restart only MenuMeter, without reinstalling unrelated utilities.
@@ -26,7 +29,7 @@ refresh-menumeter:
 	$(MAKE) -B build-menumeter
 	mkdir -p $(PREFIX)
 	install -m 755 bin/menumeter $(PREFIX)/menumeter
-	cp tools/menumeter/menumeter.swift $(PREFIX)/menumeter.swift
+	cp bin/menumeter-combined.swift $(PREFIX)/menumeter.swift
 	@pkill -x menumeter 2>/dev/null || true
 	@sleep 1
 	@nohup $(PREFIX)/menumeter >/dev/null 2>&1 </dev/null &
@@ -65,7 +68,7 @@ test-terminalclip: | bin
 install: build
 	mkdir -p $(PREFIX)
 	install -m 755 bin/menumeter $(PREFIX)/menumeter
-	cp tools/menumeter/menumeter.swift $(PREFIX)/menumeter.swift
+	cp bin/menumeter-combined.swift $(PREFIX)/menumeter.swift
 	@echo "✓ MenuMeter installed to $(PREFIX)/menumeter"
 	$(MAKE) install-terminalclip
 	$(MAKE) install-runnerpulse

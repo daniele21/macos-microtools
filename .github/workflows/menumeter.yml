@@ -4,12 +4,14 @@ on:
   pull_request:
     paths:
       - 'tools/menumeter/**'
+      - 'tools/shared/**'
       - 'Makefile'
       - '.github/workflows/menumeter.yml'
   push:
-    branches: [main, feat/menumeter-memory-health]
+    branches: [main, feat/menumeter-memory-health, feat/ledpulse-smc-discovery]
     paths:
       - 'tools/menumeter/**'
+      - 'tools/shared/**'
       - 'Makefile'
       - '.github/workflows/menumeter.yml'
 

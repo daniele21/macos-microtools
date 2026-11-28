@@ -2,6 +2,117 @@ import AppKit
 import Darwin
 import IOKit
 
+// ThermalPulse: read-only sampled hardware data. No AppKit access on the worker.
+struct ThermalFan {
+    let index: Int
+    let rpm: Double?
+    let maximum: Double?
+    var percent: Double? {
+        guard let rpm = rpm, let maximum = maximum, maximum > 0 else { return nil }
+        return rpm / maximum * 100
+    }
+}
+struct ThermalSnapshot {
+    var cpu: Double?
+    var gpu: Double?
+    var cpuCount = 0
+    var gpuCount = 0
+    var fanCount: Int?
+    var fans: [ThermalFan] = []
+    var message: String?
+    static func temperature(_ value: Double?) -> String {
+        value.map { String(format: "%.0f °C", $0) } ?? "—"
+    }
+    static func speed(_ value: Double?) -> String {
+        value.map { String(format: "%.0f RPM", $0) } ?? "—"
+    }
+    var cooling: String {
+        if fanCount == 0 { return "Senza ventole" }
+        let available = fans.filter { $0.rpm != nil }
+        if available.isEmpty { return "Ventole —" }
+        return available.map { Self.speed($0.rpm) }.joined(separator: " / ")
+    }
+}
+final class ThermalSampler {
+    // All mutable state belongs to one serial worker queue.
+    private var smc: SMC?
+    private var cpuKeys: [KeyInfo] = []
+    private var gpuKeys: [KeyInfo] = []
+    private var fanKeys: [String: KeyInfo] = [:]
+    private var count: Int?
+    private var lastDiscovery: TimeInterval = -.infinity
+    private var partial = false
+
+    static func group(_ key: String) -> Int? {
+        if key.hasPrefix("Tp") || key.hasPrefix("Te") { return 0 }
+        if key.hasPrefix("Tg") { return 1 }
+        return nil
+    }
+    static func validTemperature(_ n: Double?) -> Double? {
+        guard let n = n, n.isFinite, n > 0, n <= 125 else { return nil }
+        return n
+    }
+    static func validRPM(_ n: Double?) -> Double? {
+        guard let n = n, n.isFinite, n >= 0, n <= 30000 else { return nil }
+        return n
+    }
+    private func number(_ info: KeyInfo) -> Double? {
+        guard let smc = smc, let data = try? smc.raw(info) else { return nil }
+        return SMC.number(type: info.type, bytes: data)
+    }
+    private func discover() throws {
+        smc = SMC(transport: try AppleSMCTransport())
+        guard let smc = smc else { throw SMCError.unsupported }
+        cpuKeys = []; gpuKeys = []; fanKeys = [:]; count = nil; partial = false
+        #if arch(arm64)
+        if let total = try? smc.count() {
+            for i in 0..<total {
+                guard let key = try? smc.key(at: i) else { partial = true; continue }
+                guard let group = Self.group(key),
+                      let info = try? smc.info(key),
+                      (info.type == "flt " && info.size == 4) || (info.type == "sp78" && info.size == 2),
+                      Self.validTemperature(number(info)) != nil else { continue }
+                if group == 0 { cpuKeys.append(info) } else { gpuKeys.append(info) }
+            }
+        } else { partial = true }
+        #endif
+        if let info = try? smc.info("FNum"), let n = number(info), n >= 0, n <= 16, n.rounded() == n {
+            count = Int(n)
+            for i in 0..<Int(n) {
+                for suffix in ["Ac", "Mx"] {
+                    let key = String(format: "F%X%@", i, suffix)
+                    if let meta = try? smc.info(key) { fanKeys[key] = meta }
+                }
+            }
+        }
+    }
+    func sample() -> ThermalSnapshot {
+        let now = ProcessInfo.processInfo.systemUptime
+        let needsDiscovery = smc == nil || (cpuKeys.isEmpty && gpuKeys.isEmpty && count == nil)
+        if needsDiscovery && now - lastDiscovery >= 60 {
+            lastDiscovery = now
+            do { try discover() }
+            catch { smc = nil; return ThermalSnapshot(message: "AppleSMC non disponibile") }
+        }
+        guard smc != nil else { return ThermalSnapshot(message: "AppleSMC non disponibile") }
+        let cpu = cpuKeys.compactMap { Self.validTemperature(number($0)) }
+        let gpu = gpuKeys.compactMap { Self.validTemperature(number($0)) }
+        let fans = (0..<(count ?? 0)).map { i -> ThermalFan in
+            let prefix = String(format: "F%X", i)
+            let rpm = fanKeys[prefix + "Ac"].flatMap { Self.validRPM(number($0)) }
+            let max = fanKeys[prefix + "Mx"].flatMap { Self.validRPM(number($0)) }
+            return ThermalFan(index: i, rpm: rpm, maximum: max)
+        }
+        let hasData = !cpu.isEmpty || !gpu.isEmpty || count == 0 || fans.contains { $0.rpm != nil }
+        let result = ThermalSnapshot(cpu: cpu.max(), gpu: gpu.max(), cpuCount: cpu.count, gpuCount: gpu.count,
+                                     fanCount: count, fans: fans,
+                                     message: hasData ? (partial ? "Catalogo sensori parziale" : nil) : "Sensori non disponibili")
+        // Reconnect on complete loss, but rate-limit discovery attempts.
+        if !hasData && now - lastDiscovery >= 60 { smc = nil }
+        return result
+    }
+}
+
 // MARK: - Constants & Utilities
 
 private let gib = 1_073_741_824.0
@@ -1265,6 +1376,13 @@ final class DashboardViewController: NSViewController {
         labels: ["Panoramica", "Dettagli"], trackingMode: .selectOne, target: nil, action: nil
     )
 
+    // ThermalPulse lives inside the existing two dashboard pages.
+    let thermalSummary = NSTextField(labelWithString: "CPU — · GPU — · Ventole —")
+    let thermalCPU = NSTextField(labelWithString: "CPU —")
+    let thermalGPU = NSTextField(labelWithString: "GPU —")
+    let thermalFans = NSTextField(wrappingLabelWithString: "Ventole —")
+    let thermalSource = NSTextField(wrappingLabelWithString: "Rilevamento sensori…")
+    let thermalSection = NSStackView()
     // Footer
     let thermalLabel = NSTextField(labelWithString: "Stato termico: Nominale")
     let copyDiagButton = NSButton(title: "Copia diagnostica", target: nil, action: nil)
@@ -1320,15 +1438,28 @@ final class DashboardViewController: NSViewController {
         healthRow.spacing = 12
         healthRow.edgeInsets = NSEdgeInsets(top: 6, left: 2, bottom: 6, right: 2)
 
+        let thermalButton = NSButton(title: "Termico ›", target: self, action: #selector(showThermalClicked))
+        thermalButton.bezelStyle = .recessed
+        thermalButton.font = .systemFont(ofSize: 11, weight: .medium)
+        thermalButton.setContentHuggingPriority(.required, for: .horizontal)
+        thermalSummary.font = .monospacedDigitSystemFont(ofSize: 11, weight: .medium)
+        thermalSummary.lineBreakMode = .byTruncatingTail
+        thermalSummary.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        let thermalRow = NSStackView(views: [thermalSummary, thermalButton])
+        thermalRow.orientation = .horizontal
+        thermalRow.alignment = .centerY
+        thermalRow.distribution = .fill
+        thermalRow.edgeInsets = NSEdgeInsets(top: 0, left: 2, bottom: 0, right: 2)
+
         let overviewSeparator = NSBox()
         overviewSeparator.boxType = .separator
-        let overviewContent = NSStackView(views: [cards, healthRow, overviewSeparator, overviewProcesses])
+        let overviewContent = NSStackView(views: [cards, healthRow, thermalRow, overviewSeparator, overviewProcesses])
         overviewContent.orientation = .vertical
         overviewContent.alignment = .width
         overviewContent.spacing = 12
         // A vertical NSStackView's alignment alone does not guarantee that
         // horizontal groups fill its width. Anchor every full-width section.
-        for section in [cards, healthRow, overviewProcesses] {
+        for section in [cards, healthRow, thermalRow, overviewProcesses] {
             section.leadingAnchor.constraint(equalTo: overviewContent.leadingAnchor).isActive = true
             section.trailingAnchor.constraint(equalTo: overviewContent.trailingAnchor).isActive = true
         }
@@ -1348,13 +1479,16 @@ final class DashboardViewController: NSViewController {
         columns.spacing = 20
         let detailSeparator = NSBox()
         detailSeparator.boxType = .separator
-        let detailsContent = NSStackView(views: [columns, detailSeparator, topProcesses])
+        buildThermalSection()
+        let thermalSeparator = NSBox()
+        thermalSeparator.boxType = .separator
+        let detailsContent = NSStackView(views: [columns, detailSeparator, thermalSection, thermalSeparator, topProcesses])
         detailsContent.orientation = .vertical
         detailsContent.alignment = .width
         detailsContent.spacing = 12
         // Match the advanced columns and process table to the same content
         // edges; their metrics retain their internal alignment.
-        for section in [columns, topProcesses] {
+        for section in [columns, thermalSection, topProcesses] {
             section.leadingAnchor.constraint(equalTo: detailsContent.leadingAnchor).isActive = true
             section.trailingAnchor.constraint(equalTo: detailsContent.trailingAnchor).isActive = true
         }
@@ -1455,6 +1589,47 @@ final class DashboardViewController: NSViewController {
         overviewScrollView.isHidden = showDetails
         detailScrollView.isHidden = !showDetails
         showProcessesButton.isHidden = !showDetails
+    }
+
+    @objc private func showThermalClicked() { showDetail(at: thermalSection) }
+
+    private func buildThermalSection() {
+        let title = NSTextField(labelWithString: "ThermalPulse · Temperature e ventole")
+        title.font = .systemFont(ofSize: 13, weight: .semibold)
+        for label in [thermalCPU, thermalGPU] {
+            label.font = .monospacedDigitSystemFont(ofSize: 17, weight: .semibold)
+            label.textColor = .labelColor
+        }
+        thermalFans.font = .monospacedDigitSystemFont(ofSize: 12, weight: .medium)
+        thermalSource.font = .systemFont(ofSize: 10)
+        thermalSource.textColor = .secondaryLabelColor
+        let row = NSStackView(views: [thermalCPU, thermalGPU])
+        row.orientation = .horizontal
+        row.distribution = .fillEqually
+        thermalSection.orientation = .vertical
+        thermalSection.alignment = .width
+        thermalSection.spacing = 6
+        for child in [title, row, thermalFans, thermalSource] { thermalSection.addArrangedSubview(child) }
+    }
+
+    func updateThermal(_ sample: ThermalSnapshot) {
+        let cpu = ThermalSnapshot.temperature(sample.cpu)
+        let gpu = ThermalSnapshot.temperature(sample.gpu)
+        thermalSummary.stringValue = "CPU \(cpu) · GPU \(gpu) · \(sample.cooling)"
+        thermalCPU.stringValue = "CPU \(cpu)"
+        thermalGPU.stringValue = "GPU \(gpu)"
+        if sample.fans.isEmpty {
+            thermalFans.stringValue = sample.cooling
+        } else {
+            thermalFans.stringValue = sample.fans.map { fan in
+                let speed = ThermalSnapshot.speed(fan.rpm)
+                let max = ThermalSnapshot.speed(fan.maximum)
+                let pct = fan.percent.map { String(format: "%.0f%%", $0) } ?? "—"
+                return "Ventola \(fan.index + 1): \(speed) · \(pct) del max \(max)"
+            }.joined(separator: "\n")
+        }
+        let source = "AppleSMC · massimo dei sensori rilevati (CPU \(sample.cpuCount), GPU \(sample.gpuCount)) · sola lettura"
+        thermalSource.stringValue = [sample.message, source].compactMap { $0 }.joined(separator: "\n")
     }
 
     private func buildCPUColumn() -> NSStackView {
@@ -1993,6 +2168,12 @@ final class MenuMeter: NSObject, NSPopoverDelegate {
     private let popover = NSPopover()
     private let dashboard = DashboardViewController()
 
+    private let thermalQueue = DispatchQueue(label: "menumeter.thermal", qos: .utility)
+    private let thermalSampler = ThermalSampler()
+    private var thermalInFlight = false
+    private var lastThermalFetch: TimeInterval = -.infinity
+    private var latestThermal: ThermalSnapshot?
+
     private var lastTicks: [UInt32]?
     private var cpuHistory: [Double] = []
     private var ramHistory: [Double] = []
@@ -2082,6 +2263,25 @@ final class MenuMeter: NSObject, NSPopoverDelegate {
         // Previously the snapshot was delayed until the next 2s timer tick.
         // Start fetching immediately after the popover becomes visible.
         fetchTopProcesses()
+        fetchThermal(force: true)
+    }
+
+    private func fetchThermal(force: Bool = false) {
+        let now = ProcessInfo.processInfo.systemUptime
+        let interval: TimeInterval = popover.isShown ? 5 : 15
+        guard !thermalInFlight, force || now - lastThermalFetch >= interval else { return }
+        thermalInFlight = true
+        lastThermalFetch = now
+        thermalQueue.async { [weak self] in
+            guard let self = self else { return }
+            let snapshot = self.thermalSampler.sample()
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self else { return }
+                self.thermalInFlight = false
+                self.latestThermal = snapshot
+                self.dashboard.updateThermal(snapshot)
+            }
+        }
     }
 
     // Mach CPU Load
@@ -2261,6 +2461,13 @@ final class MenuMeter: NSObject, NSPopoverDelegate {
 
         let thermal = thermalStatus()
         lines.append("Stato termico: \(thermal.text)")
+        if let sample = latestThermal {
+            lines.append("ThermalPulse CPU: \(ThermalSnapshot.temperature(sample.cpu)) (\(sample.cpuCount) sensori) · GPU: \(ThermalSnapshot.temperature(sample.gpu)) (\(sample.gpuCount) sensori)")
+            for fan in sample.fans {
+                lines.append("Ventola \(fan.index + 1): \(ThermalSnapshot.speed(fan.rpm)) · max \(ThermalSnapshot.speed(fan.maximum))")
+            }
+            if let message = sample.message { lines.append(message) }
+        }
 
         if let ram = latestRAMStats {
             let usedGiB = ram.used / gib
@@ -2300,6 +2507,7 @@ final class MenuMeter: NSObject, NSPopoverDelegate {
     }
 
     @objc private func update() {
+        fetchThermal()
         let cpu = cpuSnapshot()
         let ramData = ramSnapshot()
         let gpuDevices = GPUReader.snapshot()
@@ -2418,7 +2626,16 @@ final class MenuMeter: NSObject, NSPopoverDelegate {
 }
 
 #if MENUMETER_TEST
-// Pure-logic smoke tests: no GUI, no permission prompts, no synthetic swap usage.
+assert(ThermalSampler.group("Tp01") == 0 && ThermalSampler.group("Te05") == 0)
+assert(ThermalSampler.group("Tg0G") == 1 && ThermalSampler.group("TH0A") == nil)
+assert(ThermalSampler.validTemperature(0) == nil && ThermalSampler.validTemperature(64) == 64)
+assert(ThermalSampler.validTemperature(.infinity) == nil && ThermalSampler.validRPM(0) == 0)
+assert(ThermalFan(index: 0, rpm: 1200, maximum: 4800).percent == 25)
+assert(ThermalFan(index: 0, rpm: nil, maximum: 4800).percent == nil)
+assert(ThermalFan(index: 0, rpm: 100, maximum: 0).percent == nil)
+assert(ThermalSnapshot(fanCount: 0).cooling == "Senza ventole")
+assert(ThermalSnapshot().cooling == "Ventole —")
+ // Pure-logic smoke tests: no GUI, no permission prompts, no synthetic swap usage.
 let statusCases = [
     MenuBarText.make(cpu: 8, gpu: 0, ram: 69, severity: 0),
     MenuBarText.make(cpu: 100, gpu: 100, ram: 100, severity: 2),
@@ -2528,6 +2745,9 @@ assert(recovered.severity == 0)
 _ = NSApplication.shared
 let layoutProbe = DashboardViewController()
 let layoutRoot = layoutProbe.view
+layoutProbe.updateThermal(ThermalSnapshot(cpu: 64, gpu: 71, cpuCount: 2, gpuCount: 1, fanCount: 1, fans: [ThermalFan(index: 0, rpm: 1200, maximum: 4800)]))
+assert(layoutProbe.thermalSummary.stringValue.contains("64 °C"))
+assert(layoutProbe.thermalFans.stringValue.contains("25%"))
 assert(layoutRoot.fittingSize.width >= 540)
 layoutProbe.updateTopProcesses(samples: mockProcesses, error: nil)
 assert(layoutProbe.topProcesses.arrangedSubviews.count >= 4)

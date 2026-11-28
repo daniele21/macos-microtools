@@ -105,3 +105,21 @@ swiftc -O -framework AppKit -framework IOKit tools/menumeter/menumeter.swift -o 
 - **Click "Copia diagnostica"**: Copies diagnostic summary to clipboard.
 - **Click "Esci"**: Terminates MenuMeter cleanly.
 
+
+
+## ThermalPulse (experimental)
+A compact thermal row in Panoramica links to the detailed section. CPU/GPU
+are the maximum valid readings from Apple Silicon SMC keys with Tp/Te/Tg
+prefixes, not a calibrated die-wide temperature. Key naming is heuristic,
+varies by generation and is not guaranteed. Fan speed is actual RPM (Ac);
+percentage is RPM / reported maximum (Mx), not duty cycle. Missing data is
+shown as unavailable; zero RPM and zero fans are valid distinct readings.
+Samples run on a serial utility queue, at most every 5 seconds with the
+popover open and 15 seconds otherwise (timer resolution 2 seconds).
+Discovery is cached; complete loss triggers a rate-limited reconnect.
+No write commands, sudo, daemons or external utilities. Thermal state still
+comes from ProcessInfo. Power/IOReport and historical charts are deferred.
+The shared read-only AppleSMC implementation is compiled into both tools.
+References: https://github.com/sebhildebrandt/macos-smc/blob/main/docs/smc-keys.md
+and https://github.com/agoodkind/macos-smc-fan/blob/main/docs/research.md .
+Use make test-menumeter and verify readings on actual hardware.

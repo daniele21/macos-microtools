@@ -3,11 +3,13 @@ on:
   pull_request:
     paths:
       - 'tools/ledpulse/**'
+      - 'tools/shared/**'
       - '.github/workflows/ledpulse.yml'
   push:
     branches: [main, feat/ledpulse-smc-discovery]
     paths:
       - 'tools/ledpulse/**'
+      - 'tools/shared/**'
       - '.github/workflows/ledpulse.yml'
 permissions:
   contents: read
