@@ -314,3 +314,17 @@ disable-llmpulse-login:
 
 status-llmpulse-login:
 	@/bin/bash tools/llmpulse/login-item.sh status
+
+# PowerPulse phase 0: explicit opt-in hardware probe, not installed by default.
+.PHONY: build-powerpulse-probe test-powerpulse-probe probe-powerpulse
+
+bin/powerpulse-probe: tools/powerpulse/powerpulse-probe.swift | bin
+	$(SWIFTC) $(SWIFTFLAGS) -framework IOKit tools/powerpulse/powerpulse-probe.swift -o bin/powerpulse-probe
+
+build-powerpulse-probe: bin/powerpulse-probe
+
+test-powerpulse-probe: build-powerpulse-probe
+	./bin/powerpulse-probe --self-test
+
+probe-powerpulse: build-powerpulse-probe
+	./bin/powerpulse-probe
